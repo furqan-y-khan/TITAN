@@ -460,7 +460,7 @@ def make_figure_3(out_dir: Path):
 
     ax1_twin = ax1.twinx()
     if k_sweep and len(k_sweep) > 0:
-        k_keys = sorted([int(k) for k in k_sweep.keys()])
+        k_keys = sorted([int(k) for k in k_sweep])
         k_acc = np.array([k_sweep[str(k)]["acc"] for k in k_keys])
         k_time = np.array([k_sweep[str(k)]["time_s"] for k in k_keys])
     else:

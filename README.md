@@ -124,10 +124,10 @@ python benchmark.py --exp 4 --quick    # Exp 4: ResNet-50 Pareto
 python benchmark.py --exp 5 --quick    # Exp 5: WRN-28-10, ViT-B/16, WikiText-2
 ```
 
-### Full Publication-Scale Training
+### Full Publication-Scale Training (Zero Time Constraints)
 
 ```bash
-# Execute the complete TPAMI empirical benchmark suite
+# Execute the complete TPAMI empirical benchmark suite (unconstrained full run)
 python benchmark.py --exp all
 ```
 
@@ -136,7 +136,7 @@ Or execute individual standalone scripts directly:
 python exp1_cifar10_resnet18_main.py --epochs 200 --runs 5
 python exp2_fmnist_cnn4_main.py --epochs 100 --runs 5
 python exp3_ablations_and_sensitivity.py --epochs-c10 200 --epochs-fm 100
-python exp4_resnet50_scaling_pareto.py --epochs 160 --max-hours 7.5
+python exp4_resnet50_scaling_pareto.py --epochs 160
 python exp5_cross_arch_wrn_vit_wikitext2.py --epochs-wrn 100 --epochs-vit 100 --epochs-lm 40
 ```
 

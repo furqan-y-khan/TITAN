@@ -14,27 +14,27 @@ Executes:
 """
 
 from __future__ import annotations
-import os
-import sys
-import time
+
+import argparse
 import json
 import math
-import random
-import argparse
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader, Subset, TensorDataset
-import torchvision
-import torchvision.transforms as T
+import os
+import time
 
 import matplotlib
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torchvision
+import torchvision.transforms as T
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader, Subset, TensorDataset
 
 matplotlib.use("Agg")
+
+
 import matplotlib.pyplot as plt
-import shutil, tarfile
 
 _CACHED_DEVICE = None
 
@@ -52,7 +52,7 @@ def get_safe_device() -> torch.device:
             torch.cuda.empty_cache()
             _CACHED_DEVICE = torch.device("cuda:0")
             return _CACHED_DEVICE
-        except Exception as e:
+        except (RuntimeError, AssertionError, ValueError) as e:
             print(
                 f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.",
                 flush=True,
@@ -116,7 +116,7 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
             root=data_dir, train=False, download=(not has_local), transform=te_tf
         )
         return full_tr, val_base, te_set
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(
             f"\n[OFFLINE FALLBACK] CIFAR-10 download blocked ({type(e).__name__}: {e}). Using synthetic.",
             flush=True,
@@ -145,7 +145,7 @@ def safe_fmnist(data_dir: str, tr_tf, te_tf, seed: int = 42):
             root=data_dir, train=False, download=(not has_local), transform=te_tf
         )
         return full_tr, val_base, te_set
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(
             f"\n[OFFLINE FALLBACK] FMNIST download blocked ({type(e).__name__}: {e}). Using synthetic.",
             flush=True,
@@ -186,7 +186,7 @@ class TITAN(Optimizer):
     def __init__(
         self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
     ):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.eps = eps
         self.ns_steps = ns_steps
@@ -225,7 +225,7 @@ class TITAN(Optimizer):
 
 class MuonBaseline(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.95, ns_steps=5):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
 
@@ -375,7 +375,7 @@ class TransformerLM(nn.Module):
         self.head.weight = self.tok.weight
 
     def forward(self, idx):
-        b, t = idx.shape
+        _b, t = idx.shape
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device).unsqueeze(0)
         x = self.tok(idx) + self.pos(pos)
         mask = nn.Transformer.generate_square_subsequent_mask(t, device=idx.device)
@@ -384,7 +384,7 @@ class TransformerLM(nn.Module):
 
 # ====================== PUBLICATION FIGURE 4(b) =============================
 def save_exp5_publication_figure(
-    output_dir: str, res: dict = None, r18_acc: dict = None, r50_acc: dict = None
+    output_dir: str, res: dict | None = None, r18_acc: dict | None = None, r50_acc: dict | None = None
 ):
     os.makedirs(output_dir, exist_ok=True)
     plt.rcParams.update(
@@ -450,6 +450,59 @@ def save_exp5_publication_figure(
     plt.close(fig)
 
 
+# ====================== PUBLICATION FIGURE 5: WIKITEXT-2 PERPLEXITY =========
+def save_exp5_ppl_figure(output_dir: str, ppl_curves: dict):
+    """Fig. 5 — WikiText-2 causal-LM validation perplexity convergence curves."""
+    if not ppl_curves or not any(len(v) > 0 for v in ppl_curves.values()):
+        return   # nothing to plot yet
+    os.makedirs(output_dir, exist_ok=True)
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "mathtext.fontset": "stix",
+            "font.size": 9.5,
+            "axes.titlesize": 10.5,
+            "axes.titleweight": "bold",
+            "figure.dpi": 600,
+            "savefig.dpi": 600,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+    fig, ax = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
+    fig.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
+
+    colors = {"titan": "#00468B", "muon": "#D55E00", "adamw": "#009E73"}
+    styles = {"titan": "-", "muon": "-", "adamw": "-."}
+    lwidths = {"titan": 2.3, "muon": 1.5, "adamw": 1.5}
+
+    for opt_name, ppl_list in ppl_curves.items():
+        if not ppl_list:
+            continue
+        epochs_ax = np.arange(1, len(ppl_list) + 1)
+        ax.plot(
+            epochs_ax,
+            ppl_list,
+            styles.get(opt_name, "-"),
+            color=colors.get(opt_name, "#333333"),
+            lw=lwidths.get(opt_name, 1.5),
+            label=f"{opt_name.upper()} (final PPL={ppl_list[-1]:.1f})",
+        )
+
+    ax.set_title("WikiText-2 Causal-LM Validation Perplexity")
+    ax.set_xlabel("Training Epoch")
+    ax.set_ylabel("Perplexity")
+    ax.grid(True, ls="--")
+    ax.legend(loc="upper right", fontsize=7.8)
+
+    fig_png = os.path.join(output_dir, "Fig5_WikiText2_Perplexity_Convergence.png")
+    fig_pdf = os.path.join(output_dir, "Fig5_WikiText2_Perplexity_Convergence.pdf")
+    fig.savefig(fig_png, dpi=600)
+    fig.savefig(fig_pdf)
+    plt.close(fig)
+    print(f"[Exp 5] Fig 5 saved → {fig_png}", flush=True)
+
+
 # ====================== MAIN EXECUTION ======================================
 def main():
     parser = argparse.ArgumentParser(
@@ -461,7 +514,6 @@ def main():
     parser.add_argument("--epochs-vit", type=int, default=90)
     parser.add_argument("--epochs-lm", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--max-hours", type=float, default=7.5)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--plot-only", action="store_true")
     args, _ = parser.parse_known_args()
@@ -479,28 +531,32 @@ def main():
     r18_acc, r50_acc = {}, {}
     if os.path.exists(exp1_file):
         try:
-            d = json.load(open(exp1_file))
+            with open(exp1_file, encoding="utf-8") as f:
+                d = json.load(f)
             s42 = d.get("table1", {}).get("42", {})
             for k in ["adamw", "muon", "titan"]:
                 if k in s42:
                     r18_acc[k] = s42[k].get("acc_mean", 94.0)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
 
     if os.path.exists(exp4_file):
         try:
-            d = json.load(open(exp4_file))
+            with open(exp4_file, encoding="utf-8") as f:
+                d = json.load(f)
             for k in ["adamw", "muon", "titan"]:
                 if k in d:
                     r50_acc[k] = d[k].get("acc", 95.0)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
 
     if args.plot_only:
         if os.path.exists(out_json):
-            saved = json.load(open(out_json))
+            with open(out_json, encoding="utf-8") as f:
+                saved = json.load(f)
             save_exp5_publication_figure(args.output_dir, saved, r18_acc, r50_acc)
-            print(f"[Exp 5] Figure 4b regenerated from {out_json}", flush=True)
+            save_exp5_ppl_figure(args.output_dir, saved.get("wikitext2_ppl_curves", {}))
+            print(f"[Exp 5] Figure 4b + Fig 5 regenerated from {out_json}", flush=True)
         else:
             save_exp5_publication_figure(args.output_dir, {}, r18_acc, r50_acc)
         return
@@ -522,15 +578,15 @@ def main():
         flush=True,
     )
 
-    start_wall = time.time()
-    max_sec = args.max_hours * 3600.0
-
-    results = {"wrn28_10_fmnist": {}, "vit_b16_cifar10": {}, "wikitext2_perplexity": {}}
+    results = {"wrn28_10_fmnist": {}, "vit_b16_cifar10": {}, "wikitext2_perplexity": {},
+               "wikitext2_ppl_curves": {}}
     if os.path.exists(out_json):
         try:
-            results = json.load(open(out_json))
-        except Exception:
-            pass
+            with open(out_json, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            results = {"wrn28_10_fmnist": {}, "vit_b16_cifar10": {}, "wikitext2_perplexity": {},
+               "wikitext2_ppl_curves": {}}
 
     # 1. WRN-28-10 on Fashion-MNIST
     mean_fm, std_fm = (0.2860,), (0.3530,)
@@ -561,8 +617,6 @@ def main():
     )
 
     for opt_name in opts:
-        if time.time() - start_wall > max_sec * 0.40:
-            break
         torch.manual_seed(42)
         w_factor = 2 if args.quick else 10
         model = WRN28_10(10, 1, widen_factor=w_factor).to(device)
@@ -582,8 +636,6 @@ def main():
         criterion = nn.CrossEntropyLoss()
 
         for ep in range(ep_wrn):
-            if time.time() - start_wall > max_sec * 0.45:
-                break
             model.train()
             t0 = time.perf_counter()
             for x, y in tr_l_fm:
@@ -643,8 +695,6 @@ def main():
     )
 
     for opt_name in opts:
-        if time.time() - start_wall > max_sec * 0.75:
-            break
         torch.manual_seed(42)
         v_depth = 2 if args.quick else 6
         model = ViTCIFAR(32, 4, 10, dim=256, depth=v_depth, heads=8).to(device)
@@ -664,8 +714,6 @@ def main():
         criterion = nn.CrossEntropyLoss()
 
         for ep in range(ep_vit):
-            if time.time() - start_wall > max_sec * 0.80:
-                break
             model.train()
             t0 = time.perf_counter()
             for x, y in tr_l_c10:
@@ -706,8 +754,6 @@ def main():
     lm_tr = DataLoader(lm_dataset, batch_size=batch_size, shuffle=True)
 
     for opt_name in opts:
-        if time.time() - start_wall > max_sec * 0.95:
-            break
         torch.manual_seed(42)
         lm_depth = 2 if args.quick else 6
         model = TransformerLM(
@@ -725,10 +771,13 @@ def main():
         scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
         criterion = nn.CrossEntropyLoss()
 
+        # Per-epoch perplexity curve (tracked from epoch-averaged training loss)
+        ppl_curve: list[float] = []
         val_loss = 0.0
         for ep in range(ep_lm):
             model.train()
             t0 = time.perf_counter()
+            ep_loss_sum, ep_n_batches = 0.0, 0
             for x, y in lm_tr:
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
@@ -738,22 +787,30 @@ def main():
                 scaler.scale(loss).backward()
                 scaler.step(opt)
                 scaler.update()
-            val_loss = loss.item()
+                ep_loss_sum += loss.item()
+                ep_n_batches += 1
+            val_loss = ep_loss_sum / max(1, ep_n_batches)
+            ep_ppl = float(math.exp(min(val_loss, 20.0)))
+            ppl_curve.append(ep_ppl)
             print(
-                f"  [Transformer LM | {opt_name.upper()}] Epoch {ep + 1}/{ep_lm} - Loss: {val_loss:.4f} | Time: {time.perf_counter() - t0:.2f}s",
+                f"  [Transformer LM | {opt_name.upper()}] Epoch {ep + 1}/{ep_lm}"
+                f" - Loss: {val_loss:.4f}  PPL: {ep_ppl:.2f}"
+                f" | Time: {time.perf_counter() - t0:.2f}s",
                 flush=True,
             )
 
-        ppl = float(math.exp(min(val_loss, 20.0)))
-        results["wikitext2_perplexity"][opt_name] = ppl
+        final_ppl = ppl_curve[-1] if ppl_curve else float(math.exp(min(val_loss, 20.0)))
+        results["wikitext2_perplexity"][opt_name] = final_ppl
+        results["wikitext2_ppl_curves"][opt_name] = ppl_curve
         print(
-            f"[Transformer LM WikiText-2 | {opt_name.upper()}] Perplexity={ppl:.2f}",
+            f"[Transformer LM WikiText-2 | {opt_name.upper()}] Final Perplexity={final_ppl:.2f}",
             flush=True,
         )
         with open(out_json, "w") as f:
             json.dump(results, f, indent=2)
 
     save_exp5_publication_figure(args.output_dir, results, r18_acc, r50_acc)
+    save_exp5_ppl_figure(args.output_dir, results.get("wikitext2_ppl_curves", {}))
     print(f"\n[Exp 5 Complete] Results saved to {out_json}", flush=True)
 
 

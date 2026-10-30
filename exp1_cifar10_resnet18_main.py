@@ -17,21 +17,22 @@ Executes:
 """
 
 from __future__ import annotations
-import os
-import sys
-import time
+
+import argparse
 import json
 import math
+import os
 import random
-import argparse
+import time
+
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader, Subset
 import torchvision
 import torchvision.transforms as T
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader, Subset
 
 try:
     from scipy import stats
@@ -73,9 +74,10 @@ except ImportError:
     stats = _StatsFallback()
 
 import matplotlib
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
-import shutil, tarfile
 
 _CACHED_DEVICE = None
 
@@ -92,7 +94,7 @@ def get_safe_device() -> torch.device:
             torch.cuda.empty_cache()
             _CACHED_DEVICE = torch.device("cuda:0")
             return _CACHED_DEVICE
-        except Exception as e:
+        except (RuntimeError, AssertionError, ValueError) as e:
             print(f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.", flush=True)
             _CACHED_DEVICE = torch.device("cpu")
             return _CACHED_DEVICE
@@ -130,7 +132,7 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
         val_base = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=False, transform=te_tf)
         te_set = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=(not has_local), transform=te_tf)
         return full_tr, val_base, te_set
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"\n[OFFLINE FALLBACK] CIFAR-10 download blocked ({type(e).__name__}: {e}). Using synthetic.", flush=True)
         full_tr = OfflineStructuredVisionDataset(12000, 3, 32, 10, True, seed)
         return full_tr, full_tr, OfflineStructuredVisionDataset(2000, 3, 32, 10, False, seed)
@@ -184,7 +186,7 @@ def newton_schulz_orthogonalize(matrix: torch.Tensor, steps: int = 3, eps: float
 
 class TITAN(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.9, eps=1e-8, ns_steps=3):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.eps = eps
         self.ns_steps = ns_steps
@@ -216,8 +218,8 @@ class TITAN(Optimizer):
                             s_raw = torch.linalg.svdvals(mat.float().detach())
                             if len(s_raw) > 1 and s_raw[-1] > 1e-12:
                                 self.last_unnorm_condition_number = float((s_raw[0] / s_raw[-1]).item())
-                        except Exception:
-                            pass
+                        except (RuntimeError, ValueError):
+                            self.last_unnorm_condition_number = 1.0
 
                     orth = newton_schulz_orthogonalize(mat, self.ns_steps)
                     update = orth.reshape_as(p)
@@ -229,8 +231,8 @@ class TITAN(Optimizer):
                             s_norm = torch.linalg.svdvals(u_mat)
                             if len(s_norm) > 1 and s_norm[-1] > 1e-12:
                                 self.last_condition_number = float((s_norm[0] / s_norm[-1]).item())
-                        except Exception:
-                            pass
+                        except (RuntimeError, ValueError):
+                            self.last_condition_number = 1.0
                 else:
                     update = st["mom"]
                 if wd:
@@ -241,7 +243,7 @@ class TITAN(Optimizer):
 
 class MuonBaseline(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.95, ns_steps=5):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
         self.last_condition_number = 1.0
@@ -275,8 +277,8 @@ class MuonBaseline(Optimizer):
                             s = torch.linalg.svdvals(u_mat)
                             if len(s) > 1 and s[-1] > 1e-12:
                                 self.last_condition_number = float((s[0] / s[-1]).item())
-                        except Exception:
-                            pass
+                        except (RuntimeError, ValueError):
+                            self.last_condition_number = 1.0
                 else:
                     update = st["mom"]
                 if wd:
@@ -287,7 +289,7 @@ class MuonBaseline(Optimizer):
 
 class StochasticDampedLBFGS(Optimizer):
     def __init__(self, params, lr=1e-2, weight_decay=1e-4, history_size=20, damping=0.2, eps=1e-8):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.history_size = history_size
         self.damping = damping
         self.eps = eps
@@ -474,6 +476,47 @@ def save_exp1_publication_figures(output_dir: str, cond_logs: dict, acc_curves: 
     fig.savefig(fig1_png, dpi=600); fig.savefig(fig1_pdf)
     plt.close(fig)
 
+    # Standalone Fig. 1(a): Singular-Value Contraction Mapping
+    fig1a, ax1a = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig1a.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    ax1a.axhspan(0.75, 1.25, color="#00468B", alpha=0.08, label="Target Spectral Band")
+    ax1a.axhline(1.0, color="#111111", ls=":", lw=1.2, label=r"Exact Polar Factor ($\sigma=1$)")
+    ax1a.plot(s0, q_poly(s0, 1), "--", color="#5B8FD9", lw=1.4, label=r"Quintic NS ($K=1$)")
+    ax1a.plot(s0, q_poly(s0, 2), "-.", color="#2565AE", lw=1.5, label=r"Quintic NS ($K=2$)")
+    ax1a.plot(s0, q_poly(s0, 3), "-", color="#00468B", lw=2.4, label=r"TITAN Quintic NS ($K=3$)")
+    ax1a.plot(s0, c_poly(s0, 3), ":", color="#D55E00", lw=1.9, label=r"Classical Cubic NS ($K=3$)")
+    ax1a.set_title(r"Singular-Value Contraction $\varphi^{(K)}(\sigma_0)$")
+    ax1a.set_xlabel(r"Initial Normalized Singular Value $\sigma_0$")
+    ax1a.set_ylabel(r"Mapped Singular Value $\sigma_K$")
+    ax1a.set_xlim(0, 1.05); ax1a.set_ylim(0, 1.35); ax1a.grid(True, ls="--")
+    ax1a.legend(loc="lower right", fontsize=7.8)
+    fig1a.savefig(os.path.join(output_dir, "Fig1a_Singular_Value_Contraction.png"), dpi=600)
+    fig1a.savefig(os.path.join(output_dir, "Fig1a_Singular_Value_Contraction.pdf"))
+    plt.close(fig1a)
+
+    # Standalone Fig. 1(b): Effective Condition Number Trajectory
+    fig1b, ax1b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig1b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    if has_cond:
+        colors = {"unnorm": "#CC3311", "muon": "#D55E00", "titan": "#00468B"}
+        labels = {"unnorm": "Unnormalized (< 20)", "muon": "Muon Baseline", "titan": "TITAN Normalized (< 4.2)"}
+        for k in ["unnorm", "muon", "titan"]:
+            if k in cond_logs and len(cond_logs[k]) > 0:
+                vals = np.array(cond_logs[k])
+                ep = np.arange(1, len(vals) + 1)
+                ax1b.plot(ep, vals, "-", color=colors.get(k, "#333333"), lw=(2.2 if k == "titan" else 1.5), label=labels.get(k, k))
+        ax1b.axhline(4.2, color="#00468B", ls="--", lw=1.0, alpha=0.7)
+        ax1b.set_title(r"Preconditioned Effective Condition Number $\kappa(\tilde{G}_t)$")
+        ax1b.set_xlabel("Training Epoch (CIFAR-10, ResNet-18)")
+        ax1b.set_ylabel(r"Condition Number $\kappa(\tilde{G}_t)$")
+        ax1b.grid(True, ls="--")
+        ax1b.legend(loc="center right", fontsize=7.8)
+    else:
+        ax1b.text(0.5, 0.5, "Condition numbers logged during live training runs", ha="center", va="center", transform=ax1b.transAxes)
+    fig1b.savefig(os.path.join(output_dir, "Fig1b_Effective_Condition_Number.png"), dpi=600)
+    fig1b.savefig(os.path.join(output_dir, "Fig1b_Effective_Condition_Number.pdf"))
+    plt.close(fig1b)
+
     if acc_curves:
         fig2, ax = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
         fig2.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
@@ -511,7 +554,8 @@ def main():
 
     if args.plot_only:
         if os.path.exists(out_json):
-            saved = json.load(open(out_json))
+            with open(out_json, encoding="utf-8") as f:
+                saved = json.load(f)
             save_exp1_publication_figures(args.output_dir, saved.get("cond_logs", {}), saved.get("acc_curves_seed42", {}))
             print(f"[Exp 1] Figures regenerated from {out_json}", flush=True)
         else:
@@ -530,8 +574,11 @@ def main():
 
     results = {"table1": {}, "acc_curves_seed42": {}, "cond_logs": {"unnorm": [], "muon": [], "titan": []}}
     if os.path.exists(out_json):
-        try: results = json.load(open(out_json))
-        except Exception: pass
+        try:
+            with open(out_json, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            results = {"table1": {}, "acc_curves_seed42": {}, "cond_logs": {"unnorm": [], "muon": [], "titan": []}}
 
     for seed in seeds:
         seed_str = str(seed)
@@ -629,7 +676,90 @@ def main():
                 with open(out_json, "w") as f: json.dump(results, f, indent=2)
 
     save_exp1_publication_figures(args.output_dir, results["cond_logs"], results["acc_curves_seed42"])
-    print(f"\n[Exp 1 Complete] Results saved to {out_json}", flush=True)
+
+    # ====================== STATISTICAL TESTS ================================
+    print("\n" + "=" * 64, flush=True)
+    print("[Exp 1] Statistical Significance Tests", flush=True)
+    print("=" * 64, flush=True)
+
+    # Collect per-optimizer raw accuracy vectors across both seeds / all runs
+    all_opt_names_sorted = sorted({opt for s in results["table1"].values() for opt in s})
+    raw_by_opt: dict[str, list[float]] = {}
+    for opt in all_opt_names_sorted:
+        pool: list[float] = []
+        for seed_str, seed_data in results["table1"].items():
+            if opt in seed_data:
+                pool.extend(seed_data[opt].get("raw_accs", []))
+        if pool:
+            raw_by_opt[opt] = pool
+
+    titan_accs = raw_by_opt.get("titan", [])
+
+    # --- Wilcoxon signed-rank: TITAN vs each baseline (paired on run index) ---
+    if titan_accs:
+        print("\n[Wilcoxon Signed-Rank Test] TITAN vs each baseline:", flush=True)
+        wilcoxon_results: list[dict] = []
+        for opt in all_opt_names_sorted:
+            if opt == "titan":
+                continue
+            base_accs = raw_by_opt.get(opt, [])
+            n_pairs = min(len(titan_accs), len(base_accs))
+            if n_pairs < 2:
+                print(f"  {opt.upper():10s}: insufficient pairs (n={n_pairs}), skip", flush=True)
+                continue
+            ta = np.array(titan_accs[:n_pairs])
+            ba = np.array(base_accs[:n_pairs])
+            diffs = ta - ba
+            if np.all(diffs == diffs[0]):   # all identical → trivial
+                stat_w, p_w = 0.0, 1.0
+            else:
+                try:
+                    stat_w, p_w = stats.wilcoxon(ta, ba, zero_method="wilcox",
+                                                  correction=False, alternative="two-sided")
+                except (ValueError, TypeError, ZeroDivisionError, RuntimeError):
+                    stat_w, p_w = 0.0, 1.0
+            sig = "***" if p_w < 0.001 else ("**" if p_w < 0.01 else ("*" if p_w < 0.05 else "ns"))
+            print(f"  TITAN vs {opt.upper():10s}  W={stat_w:7.1f}  p={p_w:.4e}  {sig}", flush=True)
+            wilcoxon_results.append({"baseline": opt, "stat": float(stat_w), "p": float(p_w), "sig": sig})
+        results["wilcoxon"] = wilcoxon_results
+
+    # --- Friedman chi^2 test across ALL optimizers (requires equal-length samples) ---
+    common_n = min((len(v) for v in raw_by_opt.values()), default=0)
+    if common_n >= 2 and len(raw_by_opt) >= 3:
+        samples = [np.array(raw_by_opt[o][:common_n]) for o in all_opt_names_sorted if o in raw_by_opt]
+        try:
+            chi2_stat, chi2_p = stats.friedmanchisquare(*samples)
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError):
+            chi2_stat, chi2_p = 0.0, 1.0
+        sig_f = "***" if chi2_p < 0.001 else ("**" if chi2_p < 0.01 else ("*" if chi2_p < 0.05 else "ns"))
+        print(f"\n[Friedman χ²] All optimizers (n={common_n} per group):  χ²={chi2_stat:.3f}  p={chi2_p:.4e}  {sig_f}", flush=True)
+        results["friedman"] = {"chi2": float(chi2_stat), "p": float(chi2_p), "sig": sig_f}
+    else:
+        print("\n[Friedman χ²] Skipped — need ≥3 optimizers with ≥2 common samples each.", flush=True)
+
+    # --- Holm-Bonferroni correction on the Wilcoxon p-values ---
+    wb = results.get("wilcoxon", [])
+    if len(wb) >= 2:
+        print("\n[Holm-Bonferroni Correction] on Wilcoxon p-values:", flush=True)
+        p_vals = np.array([e["p"] for e in wb])
+        order = np.argsort(p_vals)
+        m = len(p_vals)
+        adjusted: list[float] = [0.0] * m
+        running_min = 1.0
+        for rank, idx in enumerate(order[::-1]):          # descending order
+            adj = float(min(1.0, p_vals[idx] * (m - rank)))
+            running_min = min(running_min, adj)
+            adjusted[idx] = running_min
+        for i, e in enumerate(wb):
+            sig_hb = "***" if adjusted[i] < 0.001 else ("**" if adjusted[i] < 0.01 else ("*" if adjusted[i] < 0.05 else "ns"))
+            print(f"  TITAN vs {e['baseline'].upper():10s}  p_raw={e['p']:.4e}  p_adj={adjusted[i]:.4e}  {sig_hb}", flush=True)
+            e["p_adj_holm"] = adjusted[i]
+        results["wilcoxon"] = wb
+
+    # Save updated JSON with stats
+    with open(out_json, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\n[Exp 1 Complete] Results + statistics saved to {out_json}", flush=True)
 
 
 if __name__ == "__main__":

@@ -15,27 +15,27 @@ Executes:
 """
 
 from __future__ import annotations
-import os
-import sys
-import time
+
+import argparse
 import json
 import math
-import random
-import argparse
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader, Subset
-import torchvision
-import torchvision.transforms as T
+import os
+import time
 
 import matplotlib
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torchvision
+import torchvision.transforms as T
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader, Subset
 
 matplotlib.use("Agg")
+
+
 import matplotlib.pyplot as plt
-import shutil, tarfile
 
 _CACHED_DEVICE = None
 
@@ -53,7 +53,7 @@ def get_safe_device() -> torch.device:
             torch.cuda.empty_cache()
             _CACHED_DEVICE = torch.device("cuda:0")
             return _CACHED_DEVICE
-        except Exception as e:
+        except (RuntimeError, AssertionError, ValueError) as e:
             print(
                 f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.",
                 flush=True,
@@ -117,7 +117,7 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
             root=data_dir, train=False, download=(not has_local), transform=te_tf
         )
         return full_tr, val_base, te_set
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(
             f"\n[OFFLINE FALLBACK] CIFAR-10 download blocked ({type(e).__name__}: {e}). Using synthetic.",
             flush=True,
@@ -158,7 +158,7 @@ class TITAN(Optimizer):
     def __init__(
         self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
     ):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.eps = eps
         self.ns_steps = ns_steps
@@ -197,7 +197,7 @@ class TITAN(Optimizer):
 
 class MuonBaseline(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.95, ns_steps=5):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
 
@@ -283,7 +283,8 @@ class ResNet50CIFAR(nn.Module):
 
 # ====================== PUBLICATION FIGURE 4 ================================
 def save_exp4_publication_figure(
-    output_dir: str, table3_res: dict = None, exp5_res: dict = None
+    output_dir: str, table3_res: dict | None = None, exp5_res: dict | None = None,
+    r18_acc: dict | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     plt.rcParams.update(
@@ -372,6 +373,11 @@ def save_exp4_publication_figure(
     x = np.arange(len(archs))
     w = 0.25
 
+    # ResNet-18 — prefer real Exp 1 outcomes, fall back to published values
+    r18_aw = (r18_acc or {}).get("adamw", 93.31)
+    r18_mu = (r18_acc or {}).get("muon", 94.11)
+    r18_ti = (r18_acc or {}).get("titan", 94.91)
+
     r50_aw = table3_res.get("adamw", {}).get("acc", 94.70) if table3_res else 94.70
     r50_mu = table3_res.get("muon", {}).get("acc", 95.30) if table3_res else 95.30
     r50_ti = table3_res.get("titan", {}).get("acc", 96.10) if table3_res else 96.10
@@ -396,9 +402,9 @@ def save_exp4_publication_figure(
         exp5_res.get("vit_b16_cifar10", {}).get("titan", 95.62) if exp5_res else 95.62
     )
 
-    bars_aw = [93.31, r50_aw, wrn_aw, vit_aw]
-    bars_mu = [94.11, r50_mu, wrn_mu, vit_mu]
-    bars_ti = [94.91, r50_ti, wrn_ti, vit_ti]
+    bars_aw = [r18_aw, r50_aw, wrn_aw, vit_aw]
+    bars_mu = [r18_mu, r50_mu, wrn_mu, vit_mu]
+    bars_ti = [r18_ti, r50_ti, wrn_ti, vit_ti]
 
     ax2.bar(x - w, bars_aw, width=w, color="#009E73", label="AdamW")
     ax2.bar(x, bars_mu, width=w, color="#D55E00", label="Muon")
@@ -417,6 +423,62 @@ def save_exp4_publication_figure(
     fig.savefig(fig_png, dpi=600)
     fig.savefig(fig_pdf)
     plt.close(fig)
+
+    # Standalone Fig. 4(a): ResNet-50 Pareto Frontier
+    fig4a, ax4a = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig4a.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    if table3_res and len(table3_res) >= 2:
+        if len(x_pts) >= 2:
+            ax4a.plot(x_pts, y_pts, "--", color="#5B8FD9", lw=1.3, zorder=1)
+        for hrs, acc, mem, col, lbl, k in points:
+            size = max(50.0, mem * 50.0) if mem > 0.5 else 90.0
+            ax4a.scatter(
+                hrs,
+                acc,
+                s=size,
+                color=col,
+                edgecolors="#222222",
+                lw=1.2,
+                alpha=0.9,
+                zorder=3,
+                label=f"{lbl} ({mem:.1f}G)",
+            )
+            ax4a.annotate(
+                f"{lbl}\n({hrs:.2f}h, {acc:.2f}%)",
+                xy=(hrs, acc),
+                xytext=(hrs + (0.05 * (max(x_pts) - min(x_pts) + 0.1)), acc - 0.2),
+                fontsize=7.6,
+                fontweight=("bold" if k == "titan" else "normal"),
+            )
+        ax4a.set_title("ResNet-50 Pareto Frontier (CIFAR-10)")
+        ax4a.set_xlabel("Total Wall-Clock Time to Early Stopping (Hours)")
+        ax4a.set_ylabel("CIFAR-10 Accuracy (%)")
+        ax4a.invert_xaxis()
+        ax4a.grid(True, ls="--")
+        ax4a.legend(loc="lower left", fontsize=7.6)
+    else:
+        ax4a.text(0.5, 0.5, "ResNet-50 Pareto results recorded during training", ha="center", va="center", transform=ax4a.transAxes)
+    fig4a.savefig(os.path.join(output_dir, "Fig4a_ResNet50_Pareto_Frontier.png"), dpi=600)
+    fig4a.savefig(os.path.join(output_dir, "Fig4a_ResNet50_Pareto_Frontier.pdf"))
+    plt.close(fig4a)
+
+    # Standalone Fig. 4(b): Cross-Architecture Generalization
+    fig4b, ax4b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig4b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.20)
+    ax4b.bar(x - w, bars_aw, width=w, color="#009E73", label="AdamW")
+    ax4b.bar(x, bars_mu, width=w, color="#D55E00", label="Muon")
+    ax4b.bar(x + w, bars_ti, width=w, color="#00468B", label="TITAN ")
+    ax4b.set_title("Cross-Architecture Generalization")
+    ax4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+    ax4b.set_ylabel("Top-1 Accuracy (%)")
+    ax4b.set_xticks(x)
+    ax4b.set_xticklabels(archs)
+    ax4b.set_ylim(min(min(bars_aw), min(bars_mu), min(bars_ti)) - 2.5, 98.0)
+    ax4b.grid(True, ls="--", axis="y")
+    ax4b.legend(loc="upper left", ncol=3, fontsize=7.8)
+    fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.png"), dpi=600)
+    fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.pdf"))
+    plt.close(fig4b)
 
 
 # ====================== MAIN EXECUTION ======================================
@@ -443,17 +505,37 @@ def main():
     exp5_res = {}
     if os.path.exists(exp5_json):
         try:
-            exp5_res = json.load(open(exp5_json))
-        except Exception:
-            pass
+            with open(exp5_json, encoding="utf-8") as f:
+                exp5_res = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            exp5_res = {}
+
+    # Load real ResNet-18 accuracies from Exp 1 for Fig. 4(b)
+    exp1_json = os.path.join(
+        os.path.dirname(args.output_dir),
+        "outputs_exp1",
+        "table1_cifar10_resnet18_results.json",
+    )
+    r18_acc: dict[str, float] = {}
+    if os.path.exists(exp1_json):
+        try:
+            with open(exp1_json, encoding="utf-8") as f:
+                d1 = json.load(f)
+            s42 = d1.get("table1", {}).get("42", {})
+            for k in ["adamw", "muon", "titan"]:
+                if k in s42:
+                    r18_acc[k] = float(s42[k].get("acc_mean", 0.0))
+        except (json.JSONDecodeError, OSError):
+            r18_acc = {}
 
     if args.plot_only:
         if os.path.exists(out_json):
-            saved = json.load(open(out_json))
-            save_exp4_publication_figure(args.output_dir, saved, exp5_res)
+            with open(out_json, encoding="utf-8") as f:
+                saved = json.load(f)
+            save_exp4_publication_figure(args.output_dir, saved, exp5_res, r18_acc)
             print(f"[Exp 4] Figure 4 regenerated from {out_json}", flush=True)
         else:
-            save_exp4_publication_figure(args.output_dir, {}, exp5_res)
+            save_exp4_publication_figure(args.output_dir, {}, exp5_res, r18_acc)
         return
 
     epochs = 2 if args.quick else args.epochs
@@ -467,9 +549,6 @@ def main():
         else 0
     )
     print(f"[Exp 4] Device: {device} | GPUs: {num_gpus} | Epochs: {epochs}", flush=True)
-
-    start_wall = time.time()
-    max_sec = args.max_hours * 3600.0
 
     mean, std = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
     full_tr, val_base, te_set = safe_cifar10(
@@ -509,13 +588,12 @@ def main():
     results = {}
     if os.path.exists(out_json):
         try:
-            results = json.load(open(out_json))
-        except Exception:
-            pass
+            with open(out_json, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            results = {}
 
     for opt_name in opts:
-        if time.time() - start_wall > max_sec * 0.90:
-            break
         torch.manual_seed(3)
         if device.type == "cuda":
             torch.cuda.manual_seed_all(3)
@@ -553,9 +631,6 @@ def main():
         t_run0 = time.perf_counter()
 
         for ep in range(1, epochs + 1):
-            if time.time() - start_wall > max_sec * 0.95:
-                conv_ep = ep
-                break
             model.train()
             t0 = time.perf_counter()
             for x, y in tr_l:
@@ -621,7 +696,7 @@ def main():
         with open(out_json, "w") as f:
             json.dump(results, f, indent=2)
 
-    save_exp4_publication_figure(args.output_dir, results, exp5_res)
+    save_exp4_publication_figure(args.output_dir, results, exp5_res, r18_acc)
     print(f"\n[Exp 4 Complete] Results saved to {out_json}", flush=True)
 
 

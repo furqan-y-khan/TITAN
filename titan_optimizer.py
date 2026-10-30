@@ -1,4 +1,5 @@
 import math
+
 import torch
 from torch.optim import Optimizer
 
@@ -70,7 +71,7 @@ class TITAN(Optimizer):
         if max_grad_norm is not None and max_grad_norm <= 0:
             raise ValueError("max_grad_norm must be positive.")
 
-        defaults = dict(lr=lr, weight_decay=weight_decay)
+        defaults = {"lr": lr, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
         self.beta1, self.beta2 = betas

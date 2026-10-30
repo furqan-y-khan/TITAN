@@ -16,21 +16,21 @@ Executes:
 """
 
 from __future__ import annotations
-import os
-import sys
-import time
+
+import argparse
 import json
 import math
+import os
 import random
-import argparse
+import time
+
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim.optimizer import Optimizer
-from torch.utils.data import DataLoader, Subset
 import torchvision
 import torchvision.transforms as T
+from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.utils.data import DataLoader, Subset
 
 try:
     from scipy import stats
@@ -55,9 +55,11 @@ except ImportError:
     stats = _StatsFallback()
 
 import matplotlib
+
 matplotlib.use("Agg")
+
+
 import matplotlib.pyplot as plt
-import shutil, tarfile
 
 _CACHED_DEVICE = None
 
@@ -74,7 +76,7 @@ def get_safe_device() -> torch.device:
             torch.cuda.empty_cache()
             _CACHED_DEVICE = torch.device("cuda:0")
             return _CACHED_DEVICE
-        except Exception as e:
+        except (RuntimeError, AssertionError, ValueError) as e:
             print(f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.", flush=True)
             _CACHED_DEVICE = torch.device("cpu")
             return _CACHED_DEVICE
@@ -108,7 +110,7 @@ def safe_fmnist(data_dir: str, tr_tf, te_tf, seed: int = 42):
         val_base = torchvision.datasets.FashionMNIST(root=data_dir, train=True, download=False, transform=te_tf)
         te_set = torchvision.datasets.FashionMNIST(root=data_dir, train=False, download=(not has_local_raw), transform=te_tf)
         return full_tr, val_base, te_set
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"\n[OFFLINE FALLBACK] Fashion-MNIST download blocked ({type(e).__name__}: {e}). Using synthetic.", flush=True)
         full_tr = OfflineStructuredVisionDataset(12000, 1, 28, 10, True, seed)
         return full_tr, full_tr, OfflineStructuredVisionDataset(2000, 1, 28, 10, False, seed)
@@ -162,7 +164,7 @@ def newton_schulz_orthogonalize(matrix: torch.Tensor, steps: int = 3, eps: float
 
 class TITAN(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.9, eps=1e-8, ns_steps=3):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.eps = eps
         self.ns_steps = ns_steps
@@ -199,7 +201,7 @@ class TITAN(Optimizer):
 
 class MuonBaseline(Optimizer):
     def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.95, ns_steps=5):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
 
@@ -236,7 +238,7 @@ class MuonBaseline(Optimizer):
 
 class StochasticDampedLBFGS(Optimizer):
     def __init__(self, params, lr=1e-2, weight_decay=1e-4, history_size=20, damping=0.2, eps=1e-8):
-        super().__init__(params, dict(lr=lr, weight_decay=weight_decay))
+        super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.history_size = history_size
         self.damping = damping
         self.eps = eps
@@ -328,7 +330,7 @@ class CNN4(nn.Module):
 
 
 # ====================== PUBLICATION FIGURE 2 GENERATOR ======================
-def save_exp2_publication_figure(output_dir: str, loss_curves: dict, c10_curves: dict = None):
+def save_exp2_publication_figure(output_dir: str, loss_curves: dict, c10_curves: dict | None = None):
     os.makedirs(output_dir, exist_ok=True)
     plt.rcParams.update({
         "font.family": "serif", "mathtext.fontset": "stix", "font.size": 9.5,
@@ -376,6 +378,45 @@ def save_exp2_publication_figure(output_dir: str, loss_curves: dict, c10_curves:
     fig.savefig(fig_png, dpi=600); fig.savefig(fig_pdf)
     plt.close(fig)
 
+    # Standalone Fig. 2(b): Fashion-MNIST Training Loss Curves
+    fig2b, ax_b = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
+    fig2b.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
+    if loss_curves and any(len(c) > 0 for c in loss_curves.values()):
+        for k, curve in loss_curves.items():
+            if len(curve) > 0:
+                ax_b.plot(np.arange(1, len(curve) + 1), curve, styles.get(k.lower(), "-"),
+                          color=colors.get(k.lower(), "#333333"),
+                          lw=(2.3 if k.lower() == "titan" else 1.5),
+                          label=f"{k.upper()} (loss={min(curve):.3f})")
+        ax_b.set_title("Fashion-MNIST Cross-Entropy Loss (CNN-4)")
+        ax_b.set_xlabel("Training Epochs"); ax_b.set_ylabel("Training Cross-Entropy Loss")
+        ax_b.grid(True, ls="--")
+        ax_b.legend(loc="upper right", fontsize=7.8)
+    else:
+        ax_b.text(0.5, 0.5, "Loss curves logged dynamically during training", ha="center", va="center", transform=ax_b.transAxes)
+    fig2b.savefig(os.path.join(output_dir, "Fig2b_FashionMNIST_Loss_CNN4.png"), dpi=600)
+    fig2b.savefig(os.path.join(output_dir, "Fig2b_FashionMNIST_Loss_CNN4.pdf"))
+    plt.close(fig2b)
+
+    # Standalone Fig. 2(a) if CIFAR-10 data was loaded
+    if c10_curves and any(len(c) > 0 for c in c10_curves.values()):
+        fig2a, ax_a = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
+        fig2a.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
+        for k, curve in c10_curves.items():
+            if len(curve) > 0:
+                ax_a.plot(np.arange(1, len(curve) + 1), curve, styles.get(k.lower(), "-"),
+                          color=colors.get(k.lower(), "#333333"),
+                          lw=(2.3 if k.lower() == "titan" else 1.5),
+                          label=f"{k.upper()} ({max(curve):.2f}%)")
+        ax_a.axhline(90.0, color="#666666", ls="--", lw=1.0)
+        ax_a.set_title("(a) CIFAR-10 Test Accuracy (ResNet-18)")
+        ax_a.set_xlabel("Training Epochs"); ax_a.set_ylabel("Top-1 Test Accuracy (%)")
+        ax_a.grid(True, ls="--")
+        ax_a.legend(loc="lower right", fontsize=7.8)
+        fig2a.savefig(os.path.join(output_dir, "Fig2a_CIFAR10_Test_Accuracy_ResNet18.png"), dpi=600)
+        fig2a.savefig(os.path.join(output_dir, "Fig2a_CIFAR10_Test_Accuracy_ResNet18.pdf"))
+        plt.close(fig2a)
+
 
 # ====================== MAIN EXECUTION ======================================
 def main():
@@ -395,12 +436,16 @@ def main():
     exp1_json = os.path.join(os.path.dirname(args.output_dir), "outputs_exp1", "table1_cifar10_resnet18_results.json")
     c10_curves = {}
     if os.path.exists(exp1_json):
-        try: c10_curves = json.load(open(exp1_json)).get("acc_curves_seed42", {})
-        except Exception: pass
+        try:
+            with open(exp1_json, encoding="utf-8") as f:
+                c10_curves = json.load(f).get("acc_curves_seed42", {})
+        except (json.JSONDecodeError, OSError):
+            c10_curves = {}
 
     if args.plot_only:
         if os.path.exists(out_json):
-            saved = json.load(open(out_json))
+            with open(out_json, encoding="utf-8") as f:
+                saved = json.load(f)
             save_exp2_publication_figure(args.output_dir, saved.get("loss_curves", {}), c10_curves)
             print(f"[Exp 2] Figure 2 regenerated from {out_json}", flush=True)
         else:
@@ -418,8 +463,11 @@ def main():
 
     results = {"table2": {}, "loss_curves": {}}
     if os.path.exists(out_json):
-        try: results = json.load(open(out_json))
-        except Exception: pass
+        try:
+            with open(out_json, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            results = {"table2": {}, "loss_curves": {}}
 
     for opt_name in optimizers:
         accs, times, mems = [], [], []
@@ -511,7 +559,72 @@ def main():
             with open(out_json, "w") as f: json.dump(results, f, indent=2)
 
     save_exp2_publication_figure(args.output_dir, results["loss_curves"], c10_curves)
-    print(f"\n[Exp 2 Complete] Results saved to {out_json}", flush=True)
+
+    # ====================== STATISTICAL TESTS ================================
+    print("\n" + "=" * 64, flush=True)
+    print("[Exp 2] Fashion-MNIST Statistical Significance Tests", flush=True)
+    print("=" * 64, flush=True)
+
+    all_opts = sorted(results["table2"])
+    raw_by_opt = {o: results["table2"][o].get("raw_accs", []) for o in all_opts}
+    titan_accs = raw_by_opt.get("titan", [])
+
+    if titan_accs:
+        print("\n[Wilcoxon Signed-Rank Test] TITAN vs each baseline (Table II):", flush=True)
+        wilcoxon_results = []
+        for opt in all_opts:
+            if opt == "titan":
+                continue
+            base_accs = raw_by_opt.get(opt, [])
+            n_pairs = min(len(titan_accs), len(base_accs))
+            if n_pairs < 2:
+                continue
+            ta = np.array(titan_accs[:n_pairs])
+            ba = np.array(base_accs[:n_pairs])
+            try:
+                stat_w, p_w = stats.wilcoxon(ta, ba, zero_method="wilcox", correction=False, alternative="two-sided")
+            except (ValueError, TypeError, ZeroDivisionError, RuntimeError):
+                stat_w, p_w = 0.0, 1.0
+            sig = "***" if p_w < 0.001 else ("**" if p_w < 0.01 else ("*" if p_w < 0.05 else "ns"))
+            print(f"  TITAN vs {opt.upper():10s}  W={stat_w:7.1f}  p={p_w:.4e}  {sig}", flush=True)
+            wilcoxon_results.append({"baseline": opt, "stat": float(stat_w), "p": float(p_w), "sig": sig})
+        results["wilcoxon"] = wilcoxon_results
+
+    # Friedman chi^2
+    common_n = min((len(v) for v in raw_by_opt.values()), default=0)
+    if common_n >= 2 and len(raw_by_opt) >= 3:
+        samples = [np.array(raw_by_opt[o][:common_n]) for o in all_opts]
+        try:
+            chi2_stat, chi2_p = stats.friedmanchisquare(*samples)
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError):
+            chi2_stat, chi2_p = 0.0, 1.0
+        sig_f = "***" if chi2_p < 0.001 else ("**" if chi2_p < 0.01 else ("*" if chi2_p < 0.05 else "ns"))
+        print(f"\n[Friedman χ²] All optimizers (n={common_n} per group):  χ²={chi2_stat:.3f}  p={chi2_p:.4e}  {sig_f}", flush=True)
+        results["friedman"] = {"chi2": float(chi2_stat), "p": float(chi2_p), "sig": sig_f}
+
+    # Holm-Bonferroni correction
+    wb = results.get("wilcoxon", [])
+    if len(wb) >= 2:
+        print("\n[Holm-Bonferroni Correction] on Wilcoxon p-values:", flush=True)
+        p_vals = np.array([e["p"] for e in wb])
+        order = np.argsort(p_vals)
+        m = len(p_vals)
+        adjusted = [0.0] * m
+        running_min = 1.0
+        for rank, idx in enumerate(order[::-1]):
+            adj = float(min(1.0, p_vals[idx] * (m - rank)))
+            running_min = min(running_min, adj)
+            adjusted[idx] = running_min
+        for i, e in enumerate(wb):
+            sig_hb = "***" if adjusted[i] < 0.001 else ("**" if adjusted[i] < 0.01 else ("*" if adjusted[i] < 0.05 else "ns"))
+            print(f"  TITAN vs {e['baseline'].upper():10s}  p_raw={e['p']:.4e}  p_adj={adjusted[i]:.4e}  {sig_hb}", flush=True)
+            e["p_adj_holm"] = adjusted[i]
+        results["wilcoxon"] = wb
+
+    with open(out_json, "w") as f:
+        json.dump(results, f, indent=2)
+
+    print(f"\n[Exp 2 Complete] Results + statistics saved to {out_json}", flush=True)
 
 
 if __name__ == "__main__":

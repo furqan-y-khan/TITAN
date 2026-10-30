@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 """
@@ -40,24 +39,20 @@ import gc
 import json
 import math
 import os
-import sys
 import time
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable
 
 try:
     import resource
 except ImportError:
     resource = None
-import time
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
+
 try:
     from scipy import stats
 except ImportError:
@@ -102,9 +97,9 @@ except ImportError:
     stats = _StatsFallback()
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 # =============================================================================
 # 1. PYTORCH / FALLBACK RUNTIME BRIDGE
@@ -115,8 +110,6 @@ import matplotlib.pyplot as plt
 # =============================================================================
 try:
     import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
     from torch.optim import Optimizer
     TORCH_AVAILABLE = True
 except ImportError:
@@ -138,7 +131,7 @@ except ImportError:
     class _Tensor:
         """API-compatible Tensor supporting exact PyTorch TITAN operations."""
 
-        def __init__(self, data: Any, dtype: Optional[_DType] = None, is_sparse: bool = False):
+        def __init__(self, data: Any, dtype: _DType | None = None, is_sparse: bool = False):
             if isinstance(data, _Tensor):
                 arr = data._arr.copy()
                 dtype = dtype or data.dtype
@@ -154,24 +147,24 @@ except ImportError:
             self._arr: np.ndarray = arr
             self.dtype: _DType = dtype
             self.is_sparse: bool = is_sparse
-            self.grad: Optional[_Tensor] = None
+            self.grad: _Tensor | None = None
 
         @property
         def ndim(self) -> int:
             return self._arr.ndim
 
         @property
-        def shape(self) -> Tuple[int, ...]:
+        def shape(self) -> tuple[int, ...]:
             return self._arr.shape
 
         @property
-        def T(self) -> "_Tensor":
+        def T(self) -> _Tensor:
             return _Tensor(self._arr.T.copy(), dtype=self.dtype)
 
-        def float(self) -> "_Tensor":
+        def float(self) -> _Tensor:
             return _Tensor(self._arr.astype(np.float32, copy=True), dtype=_torch_shim.float32)
 
-        def to(self, dtype: Optional[_DType] = None) -> "_Tensor":
+        def to(self, dtype: _DType | None = None) -> _Tensor:
             if dtype is None or dtype == self.dtype:
                 return _Tensor(self._arr.copy(), dtype=self.dtype)
             return _Tensor(self._arr.astype(dtype.np_dtype, copy=True), dtype=dtype)
@@ -179,56 +172,56 @@ except ImportError:
         def item(self) -> float:
             return float(self._arr.item())
 
-        def clamp_min(self, min_val: float) -> "_Tensor":
+        def clamp_min(self, min_val: float) -> _Tensor:
             return _Tensor(np.maximum(self._arr, min_val), dtype=self.dtype)
 
         def all(self) -> bool:
             return bool(np.all(self._arr))
 
-        def sqrt(self) -> "_Tensor":
+        def sqrt(self) -> _Tensor:
             return _Tensor(np.sqrt(np.maximum(self._arr, 0.0)), dtype=self.dtype)
 
-        def mul_(self, scale: float) -> "_Tensor":
+        def mul_(self, scale: float) -> _Tensor:
             self._arr *= float(scale)
             return self
 
-        def add_(self, other: Any, alpha: float = 1.0) -> "_Tensor":
+        def add_(self, other: Any, alpha: float = 1.0) -> _Tensor:
             other_arr = other._arr if isinstance(other, _Tensor) else np.asarray(other)
             self._arr += float(alpha) * other_arr
             return self
 
-        def addcmul_(self, tensor1: "_Tensor", tensor2: "_Tensor", value: float = 1.0) -> "_Tensor":
+        def addcmul_(self, tensor1: _Tensor, tensor2: _Tensor, value: float = 1.0) -> _Tensor:
             self._arr += float(value) * (tensor1._arr * tensor2._arr)
             return self
 
-        def __matmul__(self, other: "_Tensor") -> "_Tensor":
+        def __matmul__(self, other: _Tensor) -> _Tensor:
             return _Tensor(self._arr @ other._arr, dtype=self.dtype)
 
-        def __mul__(self, other: Any) -> "_Tensor":
+        def __mul__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(self._arr * other_val, dtype=self.dtype)
 
-        def __rmul__(self, other: Any) -> "_Tensor":
+        def __rmul__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(other_val * self._arr, dtype=self.dtype)
 
-        def __add__(self, other: Any) -> "_Tensor":
+        def __add__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(self._arr + other_val, dtype=self.dtype)
 
-        def __radd__(self, other: Any) -> "_Tensor":
+        def __radd__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(other_val + self._arr, dtype=self.dtype)
 
-        def __sub__(self, other: Any) -> "_Tensor":
+        def __sub__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(self._arr - other_val, dtype=self.dtype)
 
-        def __truediv__(self, other: Any) -> "_Tensor":
+        def __truediv__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(self._arr / other_val, dtype=self.dtype)
 
-        def __rtruediv__(self, other: Any) -> "_Tensor":
+        def __rtruediv__(self, other: Any) -> _Tensor:
             other_val = other._arr if isinstance(other, _Tensor) else other
             return _Tensor(other_val / self._arr, dtype=self.dtype)
 
@@ -283,7 +276,7 @@ except ImportError:
             return _Tensor(np.isfinite(x._arr), dtype=_DType("bool", np.bool_))
 
         @staticmethod
-        def zeros_like(x: _Tensor, dtype: Optional[_DType] = None, memory_format: Any = None) -> _Tensor:
+        def zeros_like(x: _Tensor, dtype: _DType | None = None, memory_format: Any = None) -> _Tensor:
             target_dtype = dtype or x.dtype
             return _Tensor(np.zeros(x.shape, dtype=target_dtype.np_dtype), dtype=target_dtype)
 
@@ -293,10 +286,10 @@ except ImportError:
     class Optimizer:  # type: ignore
         """Minimal PyTorch Optimizer base class interface."""
 
-        def __init__(self, params: Iterable[Any], defaults: Dict[str, Any]):
+        def __init__(self, params: Iterable[Any], defaults: dict[str, Any]):
             self.defaults = dict(defaults)
-            self.state: Dict[Any, Dict[str, Any]] = {}
-            self.param_groups: List[Dict[str, Any]] = []
+            self.state: dict[Any, dict[str, Any]] = {}
+            self.param_groups: list[dict[str, Any]] = []
             param_list = list(params)
             if not param_list:
                 raise ValueError("optimizer got an empty parameter list")
@@ -405,7 +398,7 @@ class TITAN(Optimizer):
         if max_grad_norm is not None and max_grad_norm <= 0:
             raise ValueError("max_grad_norm must be positive.")
 
-        defaults = dict(lr=lr, weight_decay=weight_decay)
+        defaults = {"lr": lr, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
         self.beta1, self.beta2 = betas
@@ -526,7 +519,7 @@ class SGDMomentumBaseline(Optimizer):
     """Standard SGD with heavy-ball momentum and decoupled weight decay."""
 
     def __init__(self, params, lr=1e-3, momentum=0.9, weight_decay=0.01):
-        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay)
+        defaults = {"lr": lr, "momentum": momentum, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -560,7 +553,7 @@ class AdamBaseline(Optimizer):
     """Standard coupled-L2 Adam optimizer."""
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
-        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -606,7 +599,7 @@ class MuonBaseline(Optimizer):
     """
 
     def __init__(self, params, lr=1e-3, momentum=0.9, weight_decay=0.01, ns_steps=5, eps=1e-7):
-        defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, ns_steps=ns_steps, eps=eps)
+        defaults = {"lr": lr, "momentum": momentum, "weight_decay": weight_decay, "ns_steps": ns_steps, "eps": eps}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -646,7 +639,7 @@ class DampedDiagonalQuasiNewtonBaseline(Optimizer):
     """Damped secant quasi-Newton baseline for stochastic mini-batches."""
 
     def __init__(self, params, lr=1e-3, damping=1e-2, beta=0.9, weight_decay=0.01):
-        defaults = dict(lr=lr, damping=damping, beta=beta, weight_decay=weight_decay)
+        defaults = {"lr": lr, "damping": damping, "beta": beta, "weight_decay": weight_decay}
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -704,13 +697,13 @@ class DiskJSONLStream:
         if reset and self.filepath.exists():
             self.filepath.unlink()
 
-    def write_record(self, record: Dict[str, Any]) -> None:
+    def write_record(self, record: dict[str, Any]) -> None:
         line = json.dumps(record, separators=(",", ":")) + "\n"
         with open(self.filepath, "a", encoding="utf-8") as f:
             f.write(line)
             _safe_flush(f)
 
-    def iter_records(self) -> Iterator[Dict[str, Any]]:
+    def iter_records(self) -> Iterator[dict[str, Any]]:
         if not self.filepath.exists():
             return
         with open(self.filepath, "r", encoding="utf-8") as f:
@@ -722,7 +715,7 @@ class DiskJSONLStream:
     def read_numeric_column(
         self,
         key: str,
-        filter_fn: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        filter_fn: Callable[[dict[str, Any]], bool] | None = None,
     ) -> np.ndarray:
         """Streams a single numeric column from disk into a 1D numpy buffer."""
         gen = (
@@ -745,18 +738,18 @@ class DiskWelfordAggregator:
         if reset or not self.state_path.exists():
             self._write_state({})
 
-    def _read_state(self) -> Dict[str, Any]:
+    def _read_state(self) -> dict[str, Any]:
         with open(self.state_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    def _write_state(self, state: Dict[str, Any]) -> None:
+    def _write_state(self, state: dict[str, Any]) -> None:
         tmp_path = self.state_path.with_suffix(".tmp")
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
             _safe_flush(f)
         os.replace(tmp_path, self.state_path)
 
-    def update(self, key: str, value: float, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def update(self, key: str, value: float, metadata: dict[str, Any] | None = None) -> None:
         state = self._read_state()
         entry = state.get(key, {
             "count": 0,
@@ -787,7 +780,7 @@ class DiskWelfordAggregator:
         self._write_state(state)
         del state, entry
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         return self._read_state()
 
 
@@ -798,7 +791,7 @@ class DiskWelfordAggregator:
 @dataclass
 class ExperimentConfig:
     """All experimental parameters are configurable via CLI or config JSON."""
-    seeds: Tuple[int, ...] = (3, 42)
+    seeds: tuple[int, ...] = (3, 42)
     runs_per_seed: int = 3
     epochs: int = 35
     batch_size: int = 64
@@ -811,13 +804,13 @@ class ExperimentConfig:
     conv_kernel_size: int = 3
     base_lr: float = 1.48e-2
     weight_decay: float = 1e-2
-    betas: Tuple[float, float] = (0.9, 0.999)
+    betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
     ns_steps_default: int = 5
     ns_steps_fast: int = 3
-    ns_depth_sweep: Tuple[int, ...] = (1, 2, 3, 4, 5, 7)
-    lr_sweep: Tuple[float, ...] = (6e-3, 1.0e-2, 1.48e-2, 2.0e-2)
-    arch_width_multipliers: Tuple[float, ...] = (0.8, 1.0, 1.2, 1.4)
+    ns_depth_sweep: tuple[int, ...] = (1, 2, 3, 4, 5, 7)
+    lr_sweep: tuple[float, ...] = (6e-3, 1.0e-2, 1.48e-2, 2.0e-2)
+    arch_width_multipliers: tuple[float, ...] = (0.8, 1.0, 1.2, 1.4)
     max_grad_norm: float = 1.0
     condition_number: float = 36.0
     prototype_scale: float = 1.18
@@ -849,18 +842,18 @@ def _measure_process_memory_mb() -> float:
     if TORCH_AVAILABLE and torch.cuda.is_available():
         try:
             return float(torch.cuda.max_memory_allocated()) / (1024.0 ** 2)
-        except Exception:
-            pass
+        except (RuntimeError, ValueError):
+            return 0.0
     if resource is not None:
         try:
             rusage = resource.getrusage(resource.RUSAGE_SELF)
             return float(rusage.ru_maxrss) / 1024.0
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            return 0.0
     try:
         import psutil
         return float(psutil.Process().memory_info().rss) / (1024.0 ** 2)
-    except Exception:
+    except (ImportError, OSError, ValueError):
         return 0.0
 
 
@@ -898,7 +891,7 @@ class DeepHybridArchitecture:
         self.ln_g = _make_tensor(np.full((hid2,), 1.0 / math.sqrt(float(in_dim)), dtype=np.float32))
         self.ln_b = _make_tensor(np.zeros((hid2,), dtype=np.float32))
 
-    def parameters(self) -> List[Any]:
+    def parameters(self) -> list[Any]:
         return [self.conv_w, self.w1, self.w2, self.w3, self.ln_g, self.ln_b]
 
     def forward_and_backward(
@@ -906,7 +899,7 @@ class DeepHybridArchitecture:
         xb: np.ndarray,
         yb: np.ndarray,
         compute_grad: bool = True,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         bs = xb.shape[0]
         k_span = self.spatial_span
         gain = self.spatial_gain
@@ -922,7 +915,7 @@ class DeepHybridArchitecture:
         x_mod[:, :k_span] = xb[:, :k_span] * (1.0 + gain * c_arr[None, :])
 
         # Layer 1 (2D tall projection + GELU gate)
-        inv_sqrt2 = math.sqrt(2.0 / math.pi)
+        math.sqrt(2.0 / math.pi)
         gelu_c = math.sqrt(2.0) * 1.2035
         z1 = x_mod @ w1_n.T
         s1 = 1.0 / (1.0 + np.exp(-np.clip(gelu_c * z1, -20.0, 20.0)))
@@ -985,8 +978,8 @@ class DeepHybridArchitecture:
 def generate_anisotropic_spectral_dataset(
     cfg: ExperimentConfig,
     seed: int,
-    in_dim_override: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    in_dim_override: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generates an ill-conditioned rotated spectral classification dataset where
     all parameters come strictly from `cfg: ExperimentConfig`.
@@ -1012,10 +1005,10 @@ def generate_anisotropic_spectral_dataset(
 
 def create_optimizer_instance(
     opt_key: str,
-    params: List[Any],
+    params: list[Any],
     cfg: ExperimentConfig,
-    lr_override: Optional[float] = None,
-    ns_steps_override: Optional[int] = None,
+    lr_override: float | None = None,
+    ns_steps_override: int | None = None,
 ) -> Optimizer:
     """
     Instantiates an optimizer where EVERY optimizer receives the exact same
@@ -1075,7 +1068,7 @@ def apply_cosine_lr_step(opt: Optimizer, epoch: int, total_epochs: int) -> None:
         group["lr"] = group["initial_lr"] * (min_ratio + (1.0 - min_ratio) * cos_factor)
 
 
-def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dict[str, Path]:
+def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> dict[str, Path]:
     """
     Executes all experiments live at runtime and streams every single metric
     directly to disk with zero in-memory list growth.
@@ -1101,7 +1094,7 @@ def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dic
         norm_in = max(math.sqrt(s0_f * s0_f + s_comp * s_comp), 1.0)
         mat_scaled = _make_tensor(np.array([[s0_f * norm_in, 0.0], [0.0, s_comp * norm_in]], dtype=np.float32))
 
-        rec: Dict[str, Any] = {"sigma0": round(s0_f, 6)}
+        rec: dict[str, Any] = {"sigma0": round(s0_f, 6)}
         for k_step in (1, cfg.ns_steps_fast, cfg.ns_steps_default):
             out_t = newton_schulz_orthogonalize(mat_scaled, steps=k_step, eps=cfg.eps)
             rec[f"ns_k{k_step}"] = round(float(_to_numpy(out_t)[0, 0]), 6)
@@ -1286,7 +1279,7 @@ def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dic
     # Experiment 3(b): Runtime Learning-Rate & Aspect-Ratio Scaling Sweep
     # -------------------------------------------------------------------------
     for lr_val in cfg.lr_sweep:
-        rec_lr: Dict[str, Any] = {"lr": lr_val}
+        rec_lr: dict[str, Any] = {"lr": lr_val}
         for opt_key in ("AdamW", "Muon", "TITAN_Unscaled", "TITAN"):
             rng = np.random.default_rng(cfg.seeds[0] * 1000 + 100)
             model = DeepHybridArchitecture(
@@ -1319,9 +1312,9 @@ def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dic
     # Experiment 4: Runtime Cross-Architecture Width Scaling & Pareto Frontier
     # -------------------------------------------------------------------------
     for mult in cfg.arch_width_multipliers:
-        in_d = max(12, int(round(cfg.input_dim * mult)))
-        h1_d = max(32, int(round(cfg.hidden_dim1 * mult)))
-        h2_d = max(48, int(round(cfg.hidden_dim2 * mult)))
+        in_d = max(12, round(cfg.input_dim * mult))
+        h1_d = max(32, round(cfg.hidden_dim1 * mult))
+        h2_d = max(48, round(cfg.hidden_dim2 * mult))
         arch_label = f"Scale-{mult:.2f}x\n({h1_d}-{h2_d})"
 
         xa_tr, ya_tr, xa_te, ya_te = generate_anisotropic_spectral_dataset(
@@ -1347,8 +1340,7 @@ def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dic
                     model.forward_and_backward(xa_tr[batch_idx], ya_tr[batch_idx], compute_grad=True)
                     opt.step()
                 _, cur_acc = model.forward_and_backward(xa_te, ya_te, compute_grad=False)
-                if cur_acc > best_acc:
-                    best_acc = cur_acc
+                best_acc = max(best_acc, cur_acc)
             total_ms = (time.perf_counter() - t0) * 1000.0
             param_floats = sum(int(np.prod(p.shape)) for p in model.parameters())
             state_floats = sum(
@@ -1388,7 +1380,7 @@ def execute_all_runtime_experiments(cfg: ExperimentConfig, log_dir: Path) -> Dic
             "wilcoxon_titan_vs_adamw_p": float(wilcoxon_aw_p),
             "wilcoxon_titan_vs_muon_stat": float(wilcoxon_mu_stat),
             "wilcoxon_titan_vs_muon_p": float(wilcoxon_mu_p),
-            "num_paired_trials_per_optimizer": int(len(stat_arrays["TITAN"])),
+            "num_paired_trials_per_optimizer": len(stat_arrays["TITAN"]),
         }, f, indent=2)
         _safe_flush(f)
 
@@ -1442,17 +1434,17 @@ def _save_fig_dual(fig: plt.Figure, stem_path: Path) -> Path:
 
 
 def generate_figures_from_disk_streams(
-    paths: Dict[str, Path],
+    paths: dict[str, Path],
     cfg: ExperimentConfig,
     fig_out_dir: Path,
-) -> Dict[str, Path]:
+) -> dict[str, Path]:
     """
     Generates all 4 IEEE TPAMI figures dynamically from the disk JSONL files
     without a single hardcoded data value, coordinate, or growing Python list.
     """
     configure_ieee_matplotlib_style()
     fig_out_dir.mkdir(parents=True, exist_ok=True)
-    generated: Dict[str, Path] = {}
+    generated: dict[str, Path] = {}
 
     palette = {
         "TITAN": "#0B4F8A",
@@ -1726,7 +1718,7 @@ def generate_figures_from_disk_streams(
             std_accs = [float(np.std(acc_by_opt[o])) for o in active_opts]
             colors_bar = [palette.get(o, "#333333") for o in active_opts]
 
-            bars = ax1.bar(x_pos, mean_accs, yerr=std_accs, capsize=3.5, color=colors_bar,
+            ax1.bar(x_pos, mean_accs, yerr=std_accs, capsize=3.5, color=colors_bar,
                            edgecolor="black", linewidth=0.6, alpha=0.9)
             ax1.set_title("(a) Live Multi-Seed Final Test Accuracy (Mean ± Std)", pad=8)
             ax1.set_xlabel("Optimizer")
@@ -1758,7 +1750,7 @@ def generate_figures_from_disk_streams(
 # 8. RUNTIME VERIFICATION SUITE FOR TITAN & NEWTON-SCHULZ
 # =============================================================================
 
-def verify_titan_algorithm_runtime(cfg: ExperimentConfig, log_dir: Path) -> Dict[str, Any]:
+def verify_titan_algorithm_runtime(cfg: ExperimentConfig, log_dir: Path) -> dict[str, Any]:
     """
     Executes runtime unit and numerical checks on `newton_schulz_orthogonalize`
     and `TITAN` and persists the verification report to disk.
@@ -1848,7 +1840,7 @@ def verify_titan_algorithm_runtime(cfg: ExperimentConfig, log_dir: Path) -> Dict
 # 9. CLI ENTRY POINT (ALL PARAMETERS CONFIGURABLE AT RUNTIME)
 # =============================================================================
 
-def parse_args() -> Tuple[ExperimentConfig, Path, Path]:
+def parse_args() -> tuple[ExperimentConfig, Path, Path]:
     script_dir = Path.cwd()
     default_inter = script_dir / "intermediate" / "runtime_disk_logs"
 

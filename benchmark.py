@@ -30,7 +30,9 @@ import argparse
 import json
 import os
 import sys
+
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -222,7 +224,7 @@ def generate_all_ieee_tpami_figures(base_dir: str = "."):
     # 3(a): K-depth sweep from Exp 3 (dynamically plotted for all tested K)
     k_sweep = e3_data.get("k_sweep", {})
     if k_sweep and len(k_sweep) > 0:
-        k_keys = sorted([int(k) for k in k_sweep.keys()])
+        k_keys = sorted([int(k) for k in k_sweep])
         acc_k = np.array([k_sweep[str(k)]["acc"] for k in k_keys])
         time_k = np.array([k_sweep[str(k)]["time_s"] for k in k_keys])
         ax3_1_r = ax3_1.twinx()
@@ -375,6 +377,50 @@ def generate_all_ieee_tpami_figures(base_dir: str = "."):
     generated.extend([f4_png, f4_pdf])
 
     # Also save individual high-res versions for flexible paper selection
+    # Fig 1(a): Standalone Singular-Value Contraction
+    f1a_png = os.path.join(fig_dir, "Fig1a_Singular_Value_Contraction.png")
+    f1a_pdf = os.path.join(fig_dir, "Fig1a_Singular_Value_Contraction.pdf")
+    fig1a, ax_1a = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig1a.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    ax_1a.axhspan(0.75, 1.25, color="#00468B", alpha=0.08, label="Target Spectral Band")
+    ax_1a.axhline(1.0, color="#111111", ls=":", lw=1.2, label=r"Exact Polar Factor ($\sigma=1$)")
+    ax_1a.plot(s0, q_poly(s0, 1), "--", color="#5B8FD9", lw=1.4, label=r"Quintic NS ($K=1$)")
+    ax_1a.plot(s0, q_poly(s0, 2), "-.", color="#2565AE", lw=1.5, label=r"Quintic NS ($K=2$)")
+    ax_1a.plot(s0, q_poly(s0, 3), "-", color="#00468B", lw=2.4, label=r"TITAN Quintic NS ($K=3$)")
+    ax_1a.plot(s0, c_poly(s0, 3), ":", color="#D55E00", lw=1.9, label=r"Classical Cubic NS ($K=3$)")
+    ax_1a.set_title(r"Singular-Value Contraction $\varphi^{(K)}(\sigma_0)$")
+    ax_1a.set_xlabel(r"Initial Normalized Singular Value $\sigma_0$")
+    ax_1a.set_ylabel(r"Mapped Singular Value $\sigma_K$")
+    ax_1a.set_xlim(0, 1.05); ax_1a.set_ylim(0, 1.35); ax_1a.grid(True, ls="--")
+    ax_1a.legend(loc="lower right", fontsize=7.8)
+    fig1a.savefig(f1a_png, dpi=600); fig1a.savefig(f1a_pdf)
+    plt.close(fig1a)
+    generated.extend([f1a_png, f1a_pdf])
+
+    # Fig 1(b): Standalone Preconditioned Condition Number Trajectory
+    f1b_png = os.path.join(fig_dir, "Fig1b_Effective_Condition_Number.png")
+    f1b_pdf = os.path.join(fig_dir, "Fig1b_Effective_Condition_Number.pdf")
+    fig1b, ax_1b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig1b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    if has_cond:
+        for k in ["unnorm", "muon", "titan"]:
+            if k in cond_logs and len(cond_logs[k]) > 0:
+                vals = np.array(cond_logs[k])
+                ep = np.arange(1, len(vals) + 1)
+                ax_1b.plot(ep, vals, "-", color=colors.get(k, "#333333"), lw=(2.2 if k == "titan" else 1.5), label=labels.get(k, k))
+        ax_1b.axhline(4.2, color="#00468B", ls="--", lw=1.0, alpha=0.7)
+        ax_1b.set_title(r"Preconditioned Effective Condition Number $\kappa(\tilde{G}_t)$")
+        ax_1b.set_xlabel("Training Epoch (CIFAR-10, ResNet-18)")
+        ax_1b.set_ylabel(r"Condition Number $\kappa(\tilde{G}_t)$")
+        ax_1b.grid(True, ls="--")
+        ax_1b.legend(loc="upper right", fontsize=7.8)
+    else:
+        ax_1b.text(0.5, 0.5, "Condition numbers logged during Exp 1", ha="center", va="center", transform=ax_1b.transAxes)
+    fig1b.savefig(f1b_png, dpi=600); fig1b.savefig(f1b_pdf)
+    plt.close(fig1b)
+    generated.extend([f1b_png, f1b_pdf])
+
+    # Fig 2(a): Standalone CIFAR-10 Test Accuracy
     f2a_png = os.path.join(fig_dir, "Fig2a_CIFAR10_Test_Accuracy_ResNet18.png")
     f2a_pdf = os.path.join(fig_dir, "Fig2a_CIFAR10_Test_Accuracy_ResNet18.pdf")
     fig2a, ax_2a = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
@@ -397,6 +443,167 @@ def generate_all_ieee_tpami_figures(base_dir: str = "."):
     fig2a.savefig(f2a_pdf)
     plt.close(fig2a)
     generated.extend([f2a_png, f2a_pdf])
+
+    # Fig 2(b): Standalone Fashion-MNIST Loss
+    f2b_png = os.path.join(fig_dir, "Fig2b_FashionMNIST_Loss_CNN4.png")
+    f2b_pdf = os.path.join(fig_dir, "Fig2b_FashionMNIST_Loss_CNN4.pdf")
+    fig2b, ax_2b = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
+    fig2b.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
+    if fmnist_loss and any(len(c) > 0 for c in fmnist_loss.values()):
+        for k, curve in fmnist_loss.items():
+            if len(curve) > 0:
+                ax_2b.plot(np.arange(1, len(curve) + 1), curve, opt_styles.get(k.lower(), "-"),
+                           color=opt_colors.get(k.lower(), "#333333"),
+                           lw=(2.3 if k.lower() == "titan" else 1.5),
+                           label=f"{k.upper()} (loss={min(curve):.3f})")
+        ax_2b.legend(loc="upper right", fontsize=7.8)
+    ax_2b.set_title("(b) Fashion-MNIST Cross-Entropy Loss (CNN-4)")
+    ax_2b.set_xlabel("Training Epochs")
+    ax_2b.set_ylabel("Training Cross-Entropy Loss")
+    ax_2b.grid(True, ls="--")
+    fig2b.savefig(f2b_png, dpi=600)
+    fig2b.savefig(f2b_pdf)
+    plt.close(fig2b)
+    generated.extend([f2b_png, f2b_pdf])
+
+    # Fig 3(a): Standalone K-depth trade-off
+    f3a_png = os.path.join(fig_dir, "Fig3a_NS_Depth_Tradeoff.png")
+    f3a_pdf = os.path.join(fig_dir, "Fig3a_NS_Depth_Tradeoff.pdf")
+    fig3a, ax_3a = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig3a.subplots_adjust(left=0.14, right=0.86, top=0.90, bottom=0.16)
+    if k_sweep and len(k_sweep) > 0:
+        ax_3a_r = ax_3a.twinx()
+        l1a = ax_3a.plot(k_keys, acc_k, "-o", color="#00468B", lw=2.2, markersize=6, label="Test Accuracy (%)")
+        l2a = ax_3a_r.plot(k_keys, time_k, "--s", color="#D55E00", lw=1.9, markersize=5.5, label="Runtime (s/epoch)")
+        if 3 in k_keys:
+            idx3 = k_keys.index(3)
+            ax_3a.axvline(3, color="#009E73", ls="-.", lw=1.2)
+            ax_3a.annotate(
+                f"Default $K=3$\n({acc_k[idx3]:.2f}%, {time_k[idx3]:.1f}s)",
+                xy=(3, acc_k[idx3]), xytext=(k_keys[0], max(acc_k) * 0.92 if max(acc_k) > 0 else 0.5),
+                fontsize=7.8, bbox={"boxstyle": "round,pad=0.28", "facecolor": "#F4F7FB", "edgecolor": "#99B2CC"},
+                arrowprops={"arrowstyle": "->", "color": "#00468B", "lw": 1.0},
+            )
+        ax_3a.set_title(r"Trade-off Across NS Depth $K$ (CIFAR-10)")
+        ax_3a.set_xlabel(r"Newton-Schulz Iteration Depth $K$")
+        ax_3a.set_ylabel("Top-1 Accuracy (%)", color="#00468B")
+        ax_3a_r.set_ylabel("Runtime (s/epoch)", color="#D55E00")
+        ax_3a.set_xticks(k_keys)
+        ax_3a.grid(True, ls="--")
+        lines_3a = l1a + l2a
+        ax_3a.legend(lines_3a, [l.get_label() for l in lines_3a], loc="lower right", fontsize=7.8)
+    else:
+        ax_3a.text(0.5, 0.5, "K-sweep recorded during Exp 3", ha="center", va="center", transform=ax_3a.transAxes)
+    fig3a.savefig(f3a_png, dpi=600); fig3a.savefig(f3a_pdf)
+    plt.close(fig3a)
+    generated.extend([f3a_png, f3a_pdf])
+
+    # Fig 3(b): Standalone Learning-Rate Robustness
+    f3b_png = os.path.join(fig_dir, "Fig3b_LR_Sensitivity.png")
+    f3b_pdf = os.path.join(fig_dir, "Fig3b_LR_Sensitivity.pdf")
+    fig3b, ax_3b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig3b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    if lr_sweep and any(len(v) > 0 for v in lr_sweep.values()):
+        for i, opt in enumerate(opts_lr):
+            vals = lr_sweep[opt][:num_lrs]
+            offset = (i - (n_opts - 1) / 2.0) * width
+            col = opt_colors.get(opt.lower(), "#333333")
+            delta = max(vals) - min(vals) if len(vals) > 1 else 0.0
+            ax_3b.bar(x_lr + offset, vals, width=width * 0.9, color=col, alpha=0.9, label=rf"{opt.upper()} ($\Delta={delta:.1f}\%$)")
+        ax_3b.set_title("Learning-Rate Robustness (ResNet-18)")
+        ax_3b.set_xlabel(r"Base Learning Rate $\eta$")
+        ax_3b.set_ylabel("CIFAR-10 Accuracy (%)")
+        ax_3b.set_xticks(x_lr)
+        ax_3b.set_xticklabels(lr_labels)
+        ax_3b.grid(True, ls="--", axis="y")
+        ax_3b.legend(loc="upper center", ncol=min(3, n_opts), fontsize=7.8)
+    else:
+        ax_3b.text(0.5, 0.5, "LR sweep recorded during Exp 3", ha="center", va="center", transform=ax_3b.transAxes)
+    fig3b.savefig(f3b_png, dpi=600); fig3b.savefig(f3b_pdf)
+    plt.close(fig3b)
+    generated.extend([f3b_png, f3b_pdf])
+
+    # Fig 4(a): Standalone ResNet-50 Pareto Frontier
+    f4a_png = os.path.join(fig_dir, "Fig4a_ResNet50_Pareto_Frontier.png")
+    f4a_pdf = os.path.join(fig_dir, "Fig4a_ResNet50_Pareto_Frontier.pdf")
+    fig4a, ax_4a = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig4a.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
+    if e4_data and len(e4_data) >= 1:
+        if len(x_pts) >= 2:
+            ax_4a.plot(x_pts, y_pts, "--", color="#5B8FD9", lw=1.3, zorder=1)
+        for hrs, acc, mem, col, lbl, k in points:
+            size = max(50.0, mem * 50.0) if mem > 0.5 else 90.0
+            ax_4a.scatter(hrs, acc, s=size, color=col, edgecolors="#222222", lw=1.2, alpha=0.9, zorder=3, label=f"{lbl} ({mem:.1f}G)")
+            x_span = (max(x_pts) - min(x_pts)) if len(x_pts) >= 2 else 0.05
+            ax_4a.annotate(
+                f"{lbl}\n({hrs:.2f}h, {acc:.2f}%)",
+                xy=(hrs, acc),
+                xytext=(hrs + (0.05 * (x_span + 0.01)), acc - 0.2),
+                fontsize=7.6,
+                fontweight=("bold" if k == "titan" else "normal"),
+            )
+        ax_4a.set_title("ResNet-50 Pareto Frontier (CIFAR-10)")
+        ax_4a.set_xlabel("Total Wall-Clock Time to Early Stopping (Hours)")
+        ax_4a.set_ylabel("CIFAR-10 Accuracy (%)")
+        if len(x_pts) >= 2:
+            ax_4a.invert_xaxis()
+        ax_4a.grid(True, ls="--")
+        ax_4a.legend(loc="lower left", fontsize=7.6)
+    else:
+        ax_4a.text(0.5, 0.5, "ResNet-50 Pareto results recorded during Exp 4", ha="center", va="center", transform=ax_4a.transAxes)
+    fig4a.savefig(f4a_png, dpi=600); fig4a.savefig(f4a_pdf)
+    plt.close(fig4a)
+    generated.extend([f4a_png, f4a_pdf])
+
+    # Fig 4(b): Standalone Cross-Architecture Generalization
+    f4b_png = os.path.join(fig_dir, "Fig4b_Cross_Architecture_Generalization.png")
+    f4b_pdf = os.path.join(fig_dir, "Fig4b_Cross_Architecture_Generalization.pdf")
+    fig4b, ax_4b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
+    fig4b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.20)
+    ax_4b.bar(x_arch - w, bars_aw, width=w, color="#009E73", label="AdamW")
+    ax_4b.bar(x_arch, bars_mu, width=w, color="#D55E00", label="Muon")
+    ax_4b.bar(x_arch + w, bars_ti, width=w, color="#00468B", label="TITAN (Ours)")
+    ax_4b.set_title("Cross-Architecture Generalization")
+    ax_4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+    ax_4b.set_ylabel("Top-1 Accuracy (%)")
+    ax_4b.set_xticks(x_arch)
+    ax_4b.set_xticklabels(archs)
+    min_val = min(min(bars_aw), min(bars_mu), min(bars_ti))
+    ax_4b.set_ylim(max(0.0, min_val - 5.0), 100.0)
+    ax_4b.grid(True, ls="--", axis="y")
+    ax_4b.legend(loc="lower right", ncol=3, fontsize=7.8)
+    fig4b.savefig(f4b_png, dpi=600); fig4b.savefig(f4b_pdf)
+    plt.close(fig4b)
+    generated.extend([f4b_png, f4b_pdf])
+
+    # Fig 5: WikiText-2 Causal LM Perplexity Convergence Curve
+    f5_png = os.path.join(fig_dir, "Fig5_WikiText2_Perplexity_Convergence.png")
+    f5_pdf = os.path.join(fig_dir, "Fig5_WikiText2_Perplexity_Convergence.pdf")
+    fig5, ax5 = plt.subplots(1, 1, figsize=(4.6, 3.0), dpi=600)
+    fig5.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.18)
+    ppl_curves = e5_data.get("wikitext2_ppl_curves", {})
+    if ppl_curves and any(len(v) > 0 for v in ppl_curves.values()):
+        for opt_k in ["adamw", "muon", "titan"]:
+            if opt_k in ppl_curves and len(ppl_curves[opt_k]) > 0:
+                p_curve = ppl_curves[opt_k]
+                ax5.plot(
+                    np.arange(1, len(p_curve) + 1),
+                    p_curve,
+                    opt_styles.get(opt_k, "-"),
+                    color=opt_colors.get(opt_k, "#333333"),
+                    lw=(2.3 if opt_k == "titan" else 1.5),
+                    label=f"{opt_k.upper()} (PPL={p_curve[-1]:.1f})",
+                )
+        ax5.set_title("WikiText-2 Causal-LM Validation Perplexity")
+        ax5.set_xlabel("Training Epoch")
+        ax5.set_ylabel("Perplexity")
+        ax5.grid(True, ls="--")
+        ax5.legend(loc="upper right", fontsize=7.8)
+    else:
+        ax5.text(0.5, 0.5, "Perplexity curves recorded during Exp 5", ha="center", va="center", transform=ax5.transAxes)
+    fig5.savefig(f5_png, dpi=600); fig5.savefig(f5_pdf)
+    plt.close(fig5)
+    generated.extend([f5_png, f5_pdf])
 
     return generated
 
