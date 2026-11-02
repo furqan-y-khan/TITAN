@@ -329,45 +329,70 @@ def generate_all_ieee_tpami_figures(base_dir: str = "."):
     else:
         ax4_1.text(0.5, 0.5, "ResNet-50 Pareto results recorded during Exp 4", ha="center", va="center", transform=ax4_1.transAxes)
 
-    # 4(b): Cross-Architecture Generalization from Exp 1, Exp 4, Exp 5
-    archs = ["ResNet-18\n(C-10)", "ResNet-50\n(C-10)", "WRN-28-10\n(FMNIST)", "ViT-B/16\n(C-10)"]
-    x_arch = np.arange(len(archs))
+    # 4(b): Cross-Architecture Generalization strictly from real measured Exp 1, Exp 4, Exp 5 logs
+    table1_data = e1_data.get("table1", {})
+    r18_dict = {}
+    for k in ["adamw", "muon", "titan"]:
+        vals = [
+            seed_dict[k]["acc_mean"]
+            for seed_dict in table1_data.values()
+            if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+        ]
+        if vals:
+            r18_dict[k] = float(np.mean(vals))
+
+    r50_dict = {
+        k: float(e4_data[k]["acc"])
+        for k in ["adamw", "muon", "titan"]
+        if k in e4_data and isinstance(e4_data[k], dict) and "acc" in e4_data[k]
+    }
+    wrn_dict = {
+        k: float(e5_data["wrn28_10_fmnist"][k])
+        for k in ["adamw", "muon", "titan"]
+        if "wrn28_10_fmnist" in e5_data and isinstance(e5_data["wrn28_10_fmnist"], dict) and k in e5_data["wrn28_10_fmnist"] and e5_data["wrn28_10_fmnist"][k] is not None
+    }
+    vit_dict = {
+        k: float(e5_data["vit_b16_cifar10"][k])
+        for k in ["adamw", "muon", "titan"]
+        if "vit_b16_cifar10" in e5_data and isinstance(e5_data["vit_b16_cifar10"], dict) and k in e5_data["vit_b16_cifar10"] and e5_data["vit_b16_cifar10"][k] is not None
+    }
+
+    candidate_benchmarks = [
+        ("ResNet-18\n(C-10)", r18_dict),
+        ("ResNet-50\n(C-10)", r50_dict),
+        ("WRN-28-10\n(FMNIST)", wrn_dict),
+        ("ViT-B/16\n(C-10)", vit_dict),
+    ]
+    active_benchmarks = [(name, d) for name, d in candidate_benchmarks if len(d) > 0]
+
     w = 0.25
+    target_opts = [
+        ("adamw", "AdamW", "#009E73", -w),
+        ("muon", "Muon", "#D55E00", 0.0),
+        ("titan", "TITAN (Ours)", "#00468B", w),
+    ]
 
-    # Retrieve real measured outcomes from the dictionaries
-    r18_seed42 = e1_data.get("table1", {}).get("42", {})
-    r18_aw = r18_seed42.get("adamw", {}).get("acc_mean", 93.31)
-    r18_mu = r18_seed42.get("muon", {}).get("acc_mean", 94.11)
-    r18_ti = r18_seed42.get("titan", {}).get("acc_mean", 94.91)
-
-    r50_aw = e4_data.get("adamw", {}).get("acc", 94.70)
-    r50_mu = e4_data.get("muon", {}).get("acc", 95.30)
-    r50_ti = e4_data.get("titan", {}).get("acc", 96.10)
-
-    wrn_aw = e5_data.get("wrn28_10_fmnist", {}).get("adamw", 91.50)
-    wrn_mu = e5_data.get("wrn28_10_fmnist", {}).get("muon", 92.10)
-    wrn_ti = e5_data.get("wrn28_10_fmnist", {}).get("titan", 93.40)
-
-    vit_aw = e5_data.get("vit_b16_cifar10", {}).get("adamw", 94.10)
-    vit_mu = e5_data.get("vit_b16_cifar10", {}).get("muon", 94.85)
-    vit_ti = e5_data.get("vit_b16_cifar10", {}).get("titan", 95.62)
-
-    bars_aw = [r18_aw, r50_aw, wrn_aw, vit_aw]
-    bars_mu = [r18_mu, r50_mu, wrn_mu, vit_mu]
-    bars_ti = [r18_ti, r50_ti, wrn_ti, vit_ti]
-
-    ax4_2.bar(x_arch - w, bars_aw, width=w, color="#009E73", label="AdamW")
-    ax4_2.bar(x_arch, bars_mu, width=w, color="#D55E00", label="Muon")
-    ax4_2.bar(x_arch + w, bars_ti, width=w, color="#00468B", label="TITAN (Ours)")
-    ax4_2.set_title("(b) Cross-Architecture Generalization")
-    ax4_2.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
-    ax4_2.set_ylabel("Top-1 Accuracy (%)")
-    ax4_2.set_xticks(x_arch)
-    ax4_2.set_xticklabels(archs)
-    min_val = min(min(bars_aw), min(bars_mu), min(bars_ti))
-    ax4_2.set_ylim(max(0.0, min_val - 5.0), 100.0)
-    ax4_2.grid(True, ls="--", axis="y")
-    ax4_2.legend(loc="lower right", ncol=3, fontsize=7.8)
+    if active_benchmarks:
+        arch_names = [b[0] for b in active_benchmarks]
+        x_arch = np.arange(len(arch_names))
+        all_accs = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            ax4_2.bar(x_arch + offset, bar_heights, width=w, color=opt_col, label=opt_label)
+        ax4_2.set_title("(b) Cross-Architecture Generalization")
+        ax4_2.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+        ax4_2.set_ylabel("Top-1 Accuracy (%)")
+        ax4_2.set_xticks(x_arch)
+        ax4_2.set_xticklabels(arch_names)
+        if all_accs:
+            ax4_2.set_ylim(max(0.0, min(all_accs) - 2.5), min(100.0, max(all_accs) + 2.5))
+        ax4_2.grid(True, ls="--", axis="y")
+        ax4_2.legend(loc="upper left", ncol=3, fontsize=7.8)
+    else:
+        ax4_2.text(0.5, 0.5, "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)", ha="center", va="center", transform=ax4_2.transAxes, fontsize=8.5)
+        ax4_2.set_title("(b) Cross-Architecture Generalization")
+        ax4_2.set_xticks([])
+        ax4_2.set_yticks([])
 
     f4_png = os.path.join(fig_dir, "Fig4_ResNet50_Pareto_and_CrossArch.png")
     f4_pdf = os.path.join(fig_dir, "Fig4_ResNet50_Pareto_and_CrossArch.pdf")
@@ -560,18 +585,24 @@ def generate_all_ieee_tpami_figures(base_dir: str = "."):
     f4b_pdf = os.path.join(fig_dir, "Fig4b_Cross_Architecture_Generalization.pdf")
     fig4b, ax_4b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
     fig4b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.20)
-    ax_4b.bar(x_arch - w, bars_aw, width=w, color="#009E73", label="AdamW")
-    ax_4b.bar(x_arch, bars_mu, width=w, color="#D55E00", label="Muon")
-    ax_4b.bar(x_arch + w, bars_ti, width=w, color="#00468B", label="TITAN (Ours)")
-    ax_4b.set_title("Cross-Architecture Generalization")
-    ax_4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
-    ax_4b.set_ylabel("Top-1 Accuracy (%)")
-    ax_4b.set_xticks(x_arch)
-    ax_4b.set_xticklabels(archs)
-    min_val = min(min(bars_aw), min(bars_mu), min(bars_ti))
-    ax_4b.set_ylim(max(0.0, min_val - 5.0), 100.0)
-    ax_4b.grid(True, ls="--", axis="y")
-    ax_4b.legend(loc="lower right", ncol=3, fontsize=7.8)
+    if active_benchmarks:
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            ax_4b.bar(x_arch + offset, bar_heights, width=w, color=opt_col, label=opt_label)
+        ax_4b.set_title("Cross-Architecture Generalization")
+        ax_4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+        ax_4b.set_ylabel("Top-1 Accuracy (%)")
+        ax_4b.set_xticks(x_arch)
+        ax_4b.set_xticklabels(arch_names)
+        if all_accs:
+            ax_4b.set_ylim(max(0.0, min(all_accs) - 2.5), min(100.0, max(all_accs) + 2.5))
+        ax_4b.grid(True, ls="--", axis="y")
+        ax_4b.legend(loc="upper left", ncol=3, fontsize=7.8)
+    else:
+        ax_4b.text(0.5, 0.5, "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)", ha="center", va="center", transform=ax_4b.transAxes, fontsize=8.5)
+        ax_4b.set_title("Cross-Architecture Generalization")
+        ax_4b.set_xticks([])
+        ax_4b.set_yticks([])
     fig4b.savefig(f4b_png, dpi=600); fig4b.savefig(f4b_pdf)
     plt.close(fig4b)
     generated.extend([f4b_png, f4b_pdf])

@@ -717,87 +717,104 @@ def make_figure_4(out_dir: Path):
     )
     ax1.legend(loc="lower right", framealpha=0.92, fontsize=8.0)
 
-    # --- Panel (b): Cross-Architecture Generalization ---
-    archs = [
-        "ResNet-18\n(CIFAR-10)",
-        "ResNet-50\n(CIFAR-10)",
-        "WRN-28-10\n(Fashion-MNIST)",
-        "ViT-B/16\n(CIFAR-10)",
+    # --- Panel (b): Cross-Architecture Generalization (Strictly real measured outcomes; ZERO hardcoded values)
+    table1_data = e1.get("table1", {})
+    r18_dict = {}
+    for k in ["adamw", "muon", "titan"]:
+        vals = [
+            seed_dict[k]["acc_mean"]
+            for seed_dict in table1_data.values()
+            if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+        ]
+        if vals:
+            r18_dict[k] = float(np.mean(vals))
+
+    r50_dict = {
+        k: float(e4[k]["acc"])
+        for k in ["adamw", "muon", "titan"]
+        if k in e4 and isinstance(e4[k], dict) and "acc" in e4[k]
+    }
+    wrn_dict = {
+        k: float(e5["wrn28_10_fmnist"][k])
+        for k in ["adamw", "muon", "titan"]
+        if "wrn28_10_fmnist" in e5 and isinstance(e5["wrn28_10_fmnist"], dict) and k in e5["wrn28_10_fmnist"] and e5["wrn28_10_fmnist"][k] is not None
+    }
+    vit_dict = {
+        k: float(e5["vit_b16_cifar10"][k])
+        for k in ["adamw", "muon", "titan"]
+        if "vit_b16_cifar10" in e5 and isinstance(e5["vit_b16_cifar10"], dict) and k in e5["vit_b16_cifar10"] and e5["vit_b16_cifar10"][k] is not None
+    }
+
+    candidate_benchmarks = [
+        ("ResNet-18\n(CIFAR-10)", r18_dict),
+        ("ResNet-50\n(CIFAR-10)", r50_dict),
+        ("WRN-28-10\n(Fashion-MNIST)", wrn_dict),
+        ("ViT-B/16\n(CIFAR-10)", vit_dict),
     ]
-    x = np.arange(len(archs))
+    active_benchmarks = [(name, d) for name, d in candidate_benchmarks if len(d) > 0]
+
     bw = 0.22
+    target_opts = [
+        ("adamw", "AdamW", COLORS["AdamW"], -bw),
+        ("muon", "Muon [19]", COLORS["Muon"], 0.0),
+        ("titan", "TITAN (Ours)", COLORS["TITAN"], bw),
+    ]
 
-    r18_seed42 = e1.get("table1", {}).get("42", {})
-    r18_ti = r18_seed42.get("titan", {}).get("acc_mean", 94.91)
-    r18_mu = r18_seed42.get("muon", {}).get("acc_mean", 94.11)
-    r18_aw = r18_seed42.get("adamw", {}).get("acc_mean", 93.31)
+    if active_benchmarks:
+        arch_names = [b[0] for b in active_benchmarks]
+        x_arch = np.arange(len(arch_names))
+        all_accs = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
 
-    r50_ti = e4.get("titan", {}).get("acc", 96.10)
-    r50_mu = e4.get("muon", {}).get("acc", 95.30)
-    r50_aw = e4.get("adamw", {}).get("acc", 94.70)
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            rects = ax2.bar(
+                x_arch + offset,
+                bar_heights,
+                bw,
+                color=opt_col,
+                edgecolor="black",
+                linewidth=0.6,
+                label=opt_label,
+            )
+            if opt_key == "titan":
+                for r, val in zip(rects, bar_heights):
+                    if not np.isnan(val):
+                        ax2.text(
+                            r.get_x() + r.get_width() / 2.0,
+                            val + 0.35,
+                            f"{val:.1f}%",
+                            ha="center",
+                            va="bottom",
+                            fontsize=8.0,
+                            fontweight="bold",
+                            color=COLORS["TITAN"],
+                        )
 
-    wrn_ti = e5.get("wrn28_10_fmnist", {}).get("titan", 93.40)
-    wrn_mu = e5.get("wrn28_10_fmnist", {}).get("muon", 92.10)
-    wrn_aw = e5.get("wrn28_10_fmnist", {}).get("adamw", 91.50)
-
-    vit_ti = e5.get("vit_b16_cifar10", {}).get("titan", 95.62)
-    vit_mu = e5.get("vit_b16_cifar10", {}).get("muon", 94.85)
-    vit_aw = e5.get("vit_b16_cifar10", {}).get("adamw", 94.10)
-
-    titan_scores = [r18_ti, r50_ti, wrn_ti, vit_ti]
-    muon_scores = [r18_mu, r50_mu, wrn_mu, vit_mu]
-    adamw_scores = [r18_aw, r50_aw, wrn_aw, vit_aw]
-
-    ax2.bar(
-        x - bw,
-        adamw_scores,
-        bw,
-        color=COLORS["AdamW"],
-        edgecolor="black",
-        linewidth=0.6,
-        label="AdamW",
-    )
-    ax2.bar(
-        x,
-        muon_scores,
-        bw,
-        color=COLORS["Muon"],
-        edgecolor="black",
-        linewidth=0.6,
-        label="Muon [19]",
-    )
-    rects1 = ax2.bar(
-        x + bw,
-        titan_scores,
-        bw,
-        color=COLORS["TITAN"],
-        edgecolor="black",
-        linewidth=0.6,
-        label="TITAN (Ours)",
-    )
-
-    for r, val in zip(rects1, titan_scores):
-        ax2.text(
-            r.get_x() + r.get_width() / 2.0,
-            val + 0.35,
-            f"{val:.1f}%",
-            ha="center",
-            va="bottom",
-            fontsize=8.0,
-            fontweight="bold",
-            color=COLORS["TITAN"],
+        ax2.set_title(
+            r"(b) Cross-Architecture Generalization Across Vision Backbones", pad=8
         )
-
-    ax2.set_title(
-        r"(b) Cross-Architecture Generalization Across Vision Backbones", pad=8
-    )
-    ax2.set_xlabel("Model Architecture & Benchmark Dataset")
-    ax2.set_ylabel("Top-1 Test Accuracy (%)")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(archs, fontsize=8.8)
-    min_v = min(min(adamw_scores), min(muon_scores), min(titan_scores))
-    ax2.set_ylim(max(0.0, min_v - 5.0), 100.0)
-    ax2.legend(loc="lower right", framealpha=0.92, fontsize=8.0)
+        ax2.set_xlabel("Model Architecture & Benchmark Dataset")
+        ax2.set_ylabel("Top-1 Test Accuracy (%)")
+        ax2.set_xticks(x_arch)
+        ax2.set_xticklabels(arch_names, fontsize=8.8)
+        if all_accs:
+            ax2.set_ylim(max(0.0, min(all_accs) - 5.0), 100.0)
+        ax2.legend(loc="lower right", framealpha=0.92, fontsize=8.0)
+    else:
+        ax2.text(
+            0.5,
+            0.5,
+            "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+            fontsize=8.5,
+        )
+        ax2.set_title(
+            r"(b) Cross-Architecture Generalization Across Vision Backbones", pad=8
+        )
+        ax2.set_xticks([])
+        ax2.set_yticks([])
 
     fig.tight_layout()
     save_publication_figure(fig, out_dir / "fig4_pareto_architectures")

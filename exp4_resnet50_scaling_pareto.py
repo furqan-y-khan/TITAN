@@ -363,60 +363,77 @@ def save_exp4_publication_figure(
             transform=ax1.transAxes,
         )
 
-    # Panel 4(b): Cross-Architecture Generalization
-    archs = [
-        "ResNet-18\n(C-10)",
-        "ResNet-50\n(C-10)",
-        "WRN-28-10\n(FMNIST)",
-        "ViT-B/16\n(C-10)",
+    # Panel 4(b): Cross-Architecture Generalization (Strictly real measured outcomes; ZERO hardcoded values)
+    r18_dict = {}
+    if r18_acc:
+        for k in ["adamw", "muon", "titan"]:
+            if k in r18_acc and r18_acc[k] is not None:
+                r18_dict[k] = float(r18_acc[k])
+
+    r50_dict = {}
+    if table3_res:
+        for k in ["adamw", "muon", "titan"]:
+            if k in table3_res and isinstance(table3_res[k], dict) and "acc" in table3_res[k]:
+                r50_dict[k] = float(table3_res[k]["acc"])
+
+    wrn_dict = {}
+    if exp5_res and "wrn28_10_fmnist" in exp5_res and isinstance(exp5_res["wrn28_10_fmnist"], dict):
+        for k in ["adamw", "muon", "titan"]:
+            if k in exp5_res["wrn28_10_fmnist"] and exp5_res["wrn28_10_fmnist"][k] is not None:
+                wrn_dict[k] = float(exp5_res["wrn28_10_fmnist"][k])
+
+    vit_dict = {}
+    if exp5_res and "vit_b16_cifar10" in exp5_res and isinstance(exp5_res["vit_b16_cifar10"], dict):
+        for k in ["adamw", "muon", "titan"]:
+            if k in exp5_res["vit_b16_cifar10"] and exp5_res["vit_b16_cifar10"][k] is not None:
+                vit_dict[k] = float(exp5_res["vit_b16_cifar10"][k])
+
+    candidate_benchmarks = [
+        ("ResNet-18\n(C-10)", r18_dict),
+        ("ResNet-50\n(C-10)", r50_dict),
+        ("WRN-28-10\n(FMNIST)", wrn_dict),
+        ("ViT-B/16\n(C-10)", vit_dict),
     ]
-    x = np.arange(len(archs))
+    active_benchmarks = [(name, d) for name, d in candidate_benchmarks if len(d) > 0]
+
     w = 0.25
+    target_opts = [
+        ("adamw", "AdamW", "#009E73", -w),
+        ("muon", "Muon", "#D55E00", 0.0),
+        ("titan", "TITAN ", "#00468B", w),
+    ]
 
-    # ResNet-18 — prefer real Exp 1 outcomes, fall back to published values
-    r18_aw = (r18_acc or {}).get("adamw", 93.31)
-    r18_mu = (r18_acc or {}).get("muon", 94.11)
-    r18_ti = (r18_acc or {}).get("titan", 94.91)
+    if active_benchmarks:
+        arch_names = [b[0] for b in active_benchmarks]
+        x_idx = np.arange(len(arch_names))
+        all_vals = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
 
-    r50_aw = table3_res.get("adamw", {}).get("acc", 94.70) if table3_res else 94.70
-    r50_mu = table3_res.get("muon", {}).get("acc", 95.30) if table3_res else 95.30
-    r50_ti = table3_res.get("titan", {}).get("acc", 96.10) if table3_res else 96.10
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            ax2.bar(x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label)
 
-    wrn_aw = (
-        exp5_res.get("wrn28_10_fmnist", {}).get("adamw", 91.50) if exp5_res else 91.50
-    )
-    wrn_mu = (
-        exp5_res.get("wrn28_10_fmnist", {}).get("muon", 92.10) if exp5_res else 92.10
-    )
-    wrn_ti = (
-        exp5_res.get("wrn28_10_fmnist", {}).get("titan", 93.40) if exp5_res else 93.40
-    )
-
-    vit_aw = (
-        exp5_res.get("vit_b16_cifar10", {}).get("adamw", 94.10) if exp5_res else 94.10
-    )
-    vit_mu = (
-        exp5_res.get("vit_b16_cifar10", {}).get("muon", 94.85) if exp5_res else 94.85
-    )
-    vit_ti = (
-        exp5_res.get("vit_b16_cifar10", {}).get("titan", 95.62) if exp5_res else 95.62
-    )
-
-    bars_aw = [r18_aw, r50_aw, wrn_aw, vit_aw]
-    bars_mu = [r18_mu, r50_mu, wrn_mu, vit_mu]
-    bars_ti = [r18_ti, r50_ti, wrn_ti, vit_ti]
-
-    ax2.bar(x - w, bars_aw, width=w, color="#009E73", label="AdamW")
-    ax2.bar(x, bars_mu, width=w, color="#D55E00", label="Muon")
-    ax2.bar(x + w, bars_ti, width=w, color="#00468B", label="TITAN ")
-    ax2.set_title("(b) Cross-Architecture Generalization")
-    ax2.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
-    ax2.set_ylabel("Top-1 Accuracy (%)")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(archs)
-    ax2.set_ylim(min(min(bars_aw), min(bars_mu), min(bars_ti)) - 2.5, 98.0)
-    ax2.grid(True, ls="--", axis="y")
-    ax2.legend(loc="upper left", ncol=3, fontsize=7.8)
+        ax2.set_title("(b) Cross-Architecture Generalization")
+        ax2.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+        ax2.set_ylabel("Top-1 Accuracy (%)")
+        ax2.set_xticks(x_idx)
+        ax2.set_xticklabels(arch_names)
+        if all_vals:
+            ax2.set_ylim(max(0.0, min(all_vals) - 2.5), min(100.0, max(all_vals) + 2.5))
+        ax2.grid(True, ls="--", axis="y")
+        ax2.legend(loc="upper left", ncol=3, fontsize=7.8)
+    else:
+        ax2.text(
+            0.5,
+            0.5,
+            "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+            fontsize=8.5,
+        )
+        ax2.set_title("(b) Cross-Architecture Generalization")
+        ax2.set_xticks([])
+        ax2.set_yticks([])
 
     fig_png = os.path.join(output_dir, "Fig4_ResNet50_Pareto_and_CrossArch.png")
     fig_pdf = os.path.join(output_dir, "Fig4_ResNet50_Pareto_and_CrossArch.pdf")
@@ -465,17 +482,33 @@ def save_exp4_publication_figure(
     # Standalone Fig. 4(b): Cross-Architecture Generalization
     fig4b, ax4b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
     fig4b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.20)
-    ax4b.bar(x - w, bars_aw, width=w, color="#009E73", label="AdamW")
-    ax4b.bar(x, bars_mu, width=w, color="#D55E00", label="Muon")
-    ax4b.bar(x + w, bars_ti, width=w, color="#00468B", label="TITAN ")
-    ax4b.set_title("Cross-Architecture Generalization")
-    ax4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
-    ax4b.set_ylabel("Top-1 Accuracy (%)")
-    ax4b.set_xticks(x)
-    ax4b.set_xticklabels(archs)
-    ax4b.set_ylim(min(min(bars_aw), min(bars_mu), min(bars_ti)) - 2.5, 98.0)
-    ax4b.grid(True, ls="--", axis="y")
-    ax4b.legend(loc="upper left", ncol=3, fontsize=7.8)
+    if active_benchmarks:
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            ax4b.bar(x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label)
+
+        ax4b.set_title("Cross-Architecture Generalization")
+        ax4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+        ax4b.set_ylabel("Top-1 Accuracy (%)")
+        ax4b.set_xticks(x_idx)
+        ax4b.set_xticklabels(arch_names)
+        if all_vals:
+            ax4b.set_ylim(max(0.0, min(all_vals) - 2.5), min(100.0, max(all_vals) + 2.5))
+        ax4b.grid(True, ls="--", axis="y")
+        ax4b.legend(loc="upper left", ncol=3, fontsize=7.8)
+    else:
+        ax4b.text(
+            0.5,
+            0.5,
+            "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)",
+            ha="center",
+            va="center",
+            transform=ax4b.transAxes,
+            fontsize=8.5,
+        )
+        ax4b.set_title("Cross-Architecture Generalization")
+        ax4b.set_xticks([])
+        ax4b.set_yticks([])
     fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.png"), dpi=600)
     fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.pdf"))
     plt.close(fig4b)
@@ -521,10 +554,15 @@ def main():
         try:
             with open(exp1_json, encoding="utf-8") as f:
                 d1 = json.load(f)
-            s42 = d1.get("table1", {}).get("42", {})
+            table1 = d1.get("table1", {})
             for k in ["adamw", "muon", "titan"]:
-                if k in s42:
-                    r18_acc[k] = float(s42[k].get("acc_mean", 0.0))
+                vals = [
+                    seed_dict[k]["acc_mean"]
+                    for seed_dict in table1.values()
+                    if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+                ]
+                if vals:
+                    r18_acc[k] = float(np.mean(vals))
         except (json.JSONDecodeError, OSError):
             r18_acc = {}
 

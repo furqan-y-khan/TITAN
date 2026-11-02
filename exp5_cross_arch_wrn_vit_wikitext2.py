@@ -402,46 +402,78 @@ def save_exp5_publication_figure(
     )
     fig, ax = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
     fig.subplots_adjust(left=0.14, right=0.96, top=0.88, bottom=0.20)
-    archs = [
-        "ResNet-18\n(C-10)",
-        "ResNet-50\n(C-10)",
-        "WRN-28-10\n(FMNIST)",
-        "ViT-B/16\n(C-10)",
+
+    # Extract strictly real measured outcomes (zero hardcoded numbers)
+    r18_dict = {}
+    if r18_acc:
+        for k in ["adamw", "muon", "titan"]:
+            if k in r18_acc and r18_acc[k] is not None:
+                r18_dict[k] = float(r18_acc[k])
+
+    r50_dict = {}
+    if r50_acc:
+        for k in ["adamw", "muon", "titan"]:
+            if k in r50_acc and r50_acc[k] is not None:
+                r50_dict[k] = float(r50_acc[k])
+
+    wrn_dict = {}
+    if res and "wrn28_10_fmnist" in res and isinstance(res["wrn28_10_fmnist"], dict):
+        for k in ["adamw", "muon", "titan"]:
+            if k in res["wrn28_10_fmnist"] and res["wrn28_10_fmnist"][k] is not None:
+                wrn_dict[k] = float(res["wrn28_10_fmnist"][k])
+
+    vit_dict = {}
+    if res and "vit_b16_cifar10" in res and isinstance(res["vit_b16_cifar10"], dict):
+        for k in ["adamw", "muon", "titan"]:
+            if k in res["vit_b16_cifar10"] and res["vit_b16_cifar10"][k] is not None:
+                vit_dict[k] = float(res["vit_b16_cifar10"][k])
+
+    candidate_benchmarks = [
+        ("ResNet-18\n(C-10)", r18_dict),
+        ("ResNet-50\n(C-10)", r50_dict),
+        ("WRN-28-10\n(FMNIST)", wrn_dict),
+        ("ViT-B/16\n(C-10)", vit_dict),
     ]
-    x = np.arange(len(archs))
+    active_benchmarks = [(name, d) for name, d in candidate_benchmarks if len(d) > 0]
+
     w = 0.25
+    target_opts = [
+        ("adamw", "AdamW", "#009E73", -w),
+        ("muon", "Muon", "#D55E00", 0.0),
+        ("titan", "TITAN ", "#00468B", w),
+    ]
 
-    r18_aw = r18_acc.get("adamw", 93.31) if r18_acc else 93.31
-    r18_mu = r18_acc.get("muon", 94.11) if r18_acc else 94.11
-    r18_ti = r18_acc.get("titan", 94.91) if r18_acc else 94.91
+    if active_benchmarks:
+        arch_names = [b[0] for b in active_benchmarks]
+        x_idx = np.arange(len(arch_names))
+        all_vals = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
 
-    r50_aw = r50_acc.get("adamw", 94.70) if r50_acc else 94.70
-    r50_mu = r50_acc.get("muon", 95.30) if r50_acc else 95.30
-    r50_ti = r50_acc.get("titan", 96.10) if r50_acc else 96.10
+        for opt_key, opt_label, opt_col, offset in target_opts:
+            bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
+            ax.bar(x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label)
 
-    wrn_aw = res.get("wrn28_10_fmnist", {}).get("adamw", 91.50) if res else 91.50
-    wrn_mu = res.get("wrn28_10_fmnist", {}).get("muon", 92.10) if res else 92.10
-    wrn_ti = res.get("wrn28_10_fmnist", {}).get("titan", 93.40) if res else 93.40
-
-    vit_aw = res.get("vit_b16_cifar10", {}).get("adamw", 94.10) if res else 94.10
-    vit_mu = res.get("vit_b16_cifar10", {}).get("muon", 94.85) if res else 94.85
-    vit_ti = res.get("vit_b16_cifar10", {}).get("titan", 95.62) if res else 95.62
-
-    bars_aw = [r18_aw, r50_aw, wrn_aw, vit_aw]
-    bars_mu = [r18_mu, r50_mu, wrn_mu, vit_mu]
-    bars_ti = [r18_ti, r50_ti, wrn_ti, vit_ti]
-
-    ax.bar(x - w, bars_aw, width=w, color="#009E73", label="AdamW")
-    ax.bar(x, bars_mu, width=w, color="#D55E00", label="Muon")
-    ax.bar(x + w, bars_ti, width=w, color="#00468B", label="TITAN ")
-    ax.set_title("(b) Cross-Architecture Generalization")
-    ax.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
-    ax.set_ylabel("Top-1 Accuracy (%)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(archs)
-    ax.set_ylim(min(min(bars_aw), min(bars_mu), min(bars_ti)) - 2.5, 98.0)
-    ax.grid(True, ls="--", axis="y")
-    ax.legend(loc="upper left", ncol=3, fontsize=7.8)
+        ax.set_title("(b) Cross-Architecture Generalization")
+        ax.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
+        ax.set_ylabel("Top-1 Accuracy (%)")
+        ax.set_xticks(x_idx)
+        ax.set_xticklabels(arch_names)
+        if all_vals:
+            ax.set_ylim(max(0.0, min(all_vals) - 2.5), min(100.0, max(all_vals) + 2.5))
+        ax.grid(True, ls="--", axis="y")
+        ax.legend(loc="upper left", ncol=3, fontsize=7.8)
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "Cross-Architecture Generalization\n(Awaiting real experimental run results from Exp 1, 4, 5)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=8.5,
+        )
+        ax.set_title("(b) Cross-Architecture Generalization")
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     fig_png = os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.png")
     fig_pdf = os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.pdf")
@@ -533,10 +565,15 @@ def main():
         try:
             with open(exp1_file, encoding="utf-8") as f:
                 d = json.load(f)
-            s42 = d.get("table1", {}).get("42", {})
+            table1 = d.get("table1", {})
             for k in ["adamw", "muon", "titan"]:
-                if k in s42:
-                    r18_acc[k] = s42[k].get("acc_mean", 94.0)
+                vals = [
+                    seed_dict[k]["acc_mean"]
+                    for seed_dict in table1.values()
+                    if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+                ]
+                if vals:
+                    r18_acc[k] = float(np.mean(vals))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -545,8 +582,8 @@ def main():
             with open(exp4_file, encoding="utf-8") as f:
                 d = json.load(f)
             for k in ["adamw", "muon", "titan"]:
-                if k in d:
-                    r50_acc[k] = d[k].get("acc", 95.0)
+                if k in d and isinstance(d[k], dict) and "acc" in d[k]:
+                    r50_acc[k] = float(d[k]["acc"])
         except (json.JSONDecodeError, OSError):
             pass
 
