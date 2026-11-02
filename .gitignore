@@ -12,6 +12,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+env311/
+env*/
+env/
+.env311/
+ENV311/
+env311.bak/
+venv311.bak/
+
 
 # Datasets and large raw archives
 data/
