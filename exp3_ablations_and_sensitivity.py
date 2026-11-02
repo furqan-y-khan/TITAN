@@ -42,6 +42,7 @@ import matplotlib.pyplot as plt
 
 _CACHED_DEVICE = None
 
+
 def get_safe_device() -> torch.device:
     """Safely select CUDA if hardware capability is supported by PyTorch, else CPU."""
     global _CACHED_DEVICE
@@ -56,7 +57,10 @@ def get_safe_device() -> torch.device:
             _CACHED_DEVICE = torch.device("cuda:0")
             return _CACHED_DEVICE
         except (RuntimeError, AssertionError, ValueError) as e:
-            print(f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.", flush=True)
+            print(
+                f"[Device Guard] CUDA device initialization failed ({e}). Falling back to CPU.",
+                flush=True,
+            )
             _CACHED_DEVICE = torch.device("cpu")
             return _CACHED_DEVICE
     _CACHED_DEVICE = torch.device("cpu")
@@ -65,12 +69,24 @@ def get_safe_device() -> torch.device:
 
 # ====================== DATASETS ============================================
 class OfflineStructuredVisionDataset(torch.utils.data.Dataset):
-    def __init__(self, num_samples=12000, channels=3, img_size=32, num_classes=10, train=True, seed=42):
+    def __init__(
+        self,
+        num_samples=12000,
+        channels=3,
+        img_size=32,
+        num_classes=10,
+        train=True,
+        seed=42,
+    ):
         super().__init__()
         rng = np.random.RandomState(seed + (0 if train else 999))
-        protos = rng.normal(0, 0.6, size=(num_classes, channels, img_size, img_size)).astype(np.float32)
+        protos = rng.normal(
+            0, 0.6, size=(num_classes, channels, img_size, img_size)
+        ).astype(np.float32)
         labels = rng.randint(0, num_classes, size=(num_samples,), dtype=np.int64)
-        noise = rng.normal(0, 0.35, size=(num_samples, channels, img_size, img_size)).astype(np.float32)
+        noise = rng.normal(
+            0, 0.35, size=(num_samples, channels, img_size, img_size)
+        ).astype(np.float32)
         self.images = torch.from_numpy(protos[labels] + noise)
         self.targets = torch.from_numpy(labels).long()
 
@@ -83,37 +99,73 @@ class OfflineStructuredVisionDataset(torch.utils.data.Dataset):
 
 def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = False):
     c10_dir = os.path.join(data_dir, "cifar-10-batches-py")
-    has_local = os.path.isdir(c10_dir) and any(f.startswith("data_batch") for f in os.listdir(c10_dir))
+    has_local = os.path.isdir(c10_dir) and any(
+        f.startswith("data_batch") for f in os.listdir(c10_dir)
+    )
     if quick and not has_local:
         full_tr = OfflineStructuredVisionDataset(2000, 3, 32, 10, True, seed)
-        return full_tr, full_tr, OfflineStructuredVisionDataset(500, 3, 32, 10, False, seed)
+        return (
+            full_tr,
+            full_tr,
+            OfflineStructuredVisionDataset(500, 3, 32, 10, False, seed),
+        )
     try:
-        full_tr = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=(not has_local), transform=tr_tf)
-        val_base = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=False, transform=te_tf)
-        te_set = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=(not has_local), transform=te_tf)
+        full_tr = torchvision.datasets.CIFAR10(
+            root=data_dir, train=True, download=True, transform=tr_tf
+        )
+        val_base = torchvision.datasets.CIFAR10(
+            root=data_dir, train=True, download=True, transform=te_tf
+        )
+        te_set = torchvision.datasets.CIFAR10(
+            root=data_dir, train=False, download=True, transform=te_tf
+        )
         return full_tr, val_base, te_set
     except (RuntimeError, OSError, ValueError) as e:
-        print(f"\n[OFFLINE FALLBACK] CIFAR-10 download blocked ({type(e).__name__}: {e}). Using synthetic.", flush=True)
+        print(
+            f"\n[OFFLINE FALLBACK] CIFAR-10 download blocked ({type(e).__name__}: {e}). Using synthetic.",
+            flush=True,
+        )
         full_tr = OfflineStructuredVisionDataset(12000, 3, 32, 10, True, seed)
-        return full_tr, full_tr, OfflineStructuredVisionDataset(2000, 3, 32, 10, False, seed)
+        return (
+            full_tr,
+            full_tr,
+            OfflineStructuredVisionDataset(2000, 3, 32, 10, False, seed),
+        )
 
 
 def safe_fmnist(data_dir: str, tr_tf, te_tf, seed: int = 42):
     raw_dir = os.path.join(data_dir, "FashionMNIST", "raw")
-    has_local = os.path.isdir(raw_dir) and any(f.startswith("train-images") for f in os.listdir(raw_dir))
+    has_local = os.path.isdir(raw_dir) and any(
+        f.startswith("train-images") for f in os.listdir(raw_dir)
+    )
     try:
-        full_tr = torchvision.datasets.FashionMNIST(root=data_dir, train=True, download=(not has_local), transform=tr_tf)
-        val_base = torchvision.datasets.FashionMNIST(root=data_dir, train=True, download=False, transform=te_tf)
-        te_set = torchvision.datasets.FashionMNIST(root=data_dir, train=False, download=(not has_local), transform=te_tf)
+        full_tr = torchvision.datasets.FashionMNIST(
+            root=data_dir, train=True, download=True, transform=tr_tf
+        )
+        val_base = torchvision.datasets.FashionMNIST(
+            root=data_dir, train=True, download=True, transform=te_tf
+        )
+        te_set = torchvision.datasets.FashionMNIST(
+            root=data_dir, train=False, download=True, transform=te_tf
+        )
         return full_tr, val_base, te_set
     except (RuntimeError, OSError, ValueError) as e:
-        print(f"\n[OFFLINE FALLBACK] FMNIST download blocked ({type(e).__name__}: {e}). Using synthetic.", flush=True)
+        print(
+            f"\n[OFFLINE FALLBACK] FMNIST download blocked ({type(e).__name__}: {e}). Using synthetic.",
+            flush=True,
+        )
         full_tr = OfflineStructuredVisionDataset(12000, 1, 28, 10, True, seed)
-        return full_tr, full_tr, OfflineStructuredVisionDataset(2000, 1, 28, 10, False, seed)
+        return (
+            full_tr,
+            full_tr,
+            OfflineStructuredVisionDataset(2000, 1, 28, 10, False, seed),
+        )
 
 
 # ====================== OPTIMIZERS ==========================================
-def newton_schulz_orthogonalize(matrix: torch.Tensor, steps: int = 3, eps: float = 1e-7) -> torch.Tensor:
+def newton_schulz_orthogonalize(
+    matrix: torch.Tensor, steps: int = 3, eps: float = 1e-7
+) -> torch.Tensor:
     if matrix.ndim != 2:
         raise ValueError("Expected a 2D matrix.")
     if matrix.numel() == 0:
@@ -135,7 +187,9 @@ def newton_schulz_orthogonalize(matrix: torch.Tensor, steps: int = 3, eps: float
 
 
 class TITAN(Optimizer):
-    def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3):
+    def __init__(
+        self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
+    ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.eps = eps
@@ -161,7 +215,9 @@ class TITAN(Optimizer):
                 st["mom"].mul_(self.beta).add_(g, alpha=1 - self.beta)
                 if p.ndim >= 2:
                     mat = st["mom"].reshape(st["mom"].shape[0], -1)
-                    update = newton_schulz_orthogonalize(mat, self.ns_steps).reshape_as(p)
+                    update = newton_schulz_orthogonalize(mat, self.ns_steps).reshape_as(
+                        p
+                    )
                     update = update / (update.float().square().mean().sqrt() + self.eps)
                 else:
                     update = st["mom"]
@@ -172,7 +228,17 @@ class TITAN(Optimizer):
 
 
 class TITANAdaptive(Optimizer):
-    def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta1=0.9, beta2=0.999, alpha=0.5, eps=1e-8, ns_steps=3):
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        weight_decay=1e-4,
+        beta1=0.9,
+        beta2=0.999,
+        alpha=0.5,
+        eps=1e-8,
+        ns_steps=3,
+    ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta1 = beta1
         self.beta2 = beta2
@@ -218,8 +284,18 @@ class TITANAdaptive(Optimizer):
 
 
 class TITANAblation(Optimizer):
-    def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3,
-                 use_ns=True, use_rms_norm=True, use_momentum=True):
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        weight_decay=1e-4,
+        beta=0.9,
+        eps=1e-8,
+        ns_steps=3,
+        use_ns=True,
+        use_rms_norm=True,
+        use_momentum=True,
+    ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta if use_momentum else 0.0
         self.eps = eps
@@ -253,7 +329,9 @@ class TITANAblation(Optimizer):
 
                 if p.ndim >= 2 and self.use_ns:
                     mat = base.reshape(base.shape[0], -1)
-                    update = newton_schulz_orthogonalize(mat, self.ns_steps).reshape_as(p)
+                    update = newton_schulz_orthogonalize(mat, self.ns_steps).reshape_as(
+                        p
+                    )
                 else:
                     update = base
 
@@ -313,10 +391,15 @@ class BasicBlock(nn.Module):
         self.b2 = nn.BatchNorm2d(p)
         self.sc = nn.Sequential()
         if s != 1 or in_p != p:
-            self.sc = nn.Sequential(nn.Conv2d(in_p, p, 1, stride=s, bias=False), nn.BatchNorm2d(p))
+            self.sc = nn.Sequential(
+                nn.Conv2d(in_p, p, 1, stride=s, bias=False), nn.BatchNorm2d(p)
+            )
 
     def forward(self, x):
-        return F.relu(self.b2(self.c2(F.relu(self.b1(self.c1(x)), inplace=True))) + self.sc(x), inplace=True)
+        return F.relu(
+            self.b2(self.c2(F.relu(self.b1(self.c1(x)), inplace=True))) + self.sc(x),
+            inplace=True,
+        )
 
 
 class ResNet18CIFAR(nn.Module):
@@ -347,8 +430,10 @@ class ResNet18CIFAR(nn.Module):
 class LeNet5(nn.Module):
     def __init__(self, num_classes=10):
         super().__init__()
-        self.c1 = nn.Conv2d(1, 32, 5, padding=2); self.b1 = nn.BatchNorm2d(32)
-        self.c2 = nn.Conv2d(32, 64, 5, padding=0); self.b2 = nn.BatchNorm2d(64)
+        self.c1 = nn.Conv2d(1, 32, 5, padding=2)
+        self.b1 = nn.BatchNorm2d(32)
+        self.c2 = nn.Conv2d(32, 64, 5, padding=0)
+        self.b2 = nn.BatchNorm2d(64)
         self.fc1 = nn.Linear(64 * 5 * 5, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, num_classes)
@@ -362,11 +447,19 @@ class LeNet5(nn.Module):
 # ====================== PUBLICATION FIGURE 3 ================================
 def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict):
     os.makedirs(output_dir, exist_ok=True)
-    plt.rcParams.update({
-        "font.family": "serif", "mathtext.fontset": "stix", "font.size": 9.5,
-        "axes.titlesize": 10.5, "axes.titleweight": "bold", "figure.dpi": 600,
-        "savefig.dpi": 600, "pdf.fonttype": 42, "ps.fonttype": 42,
-    })
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "mathtext.fontset": "stix",
+            "font.size": 9.5,
+            "axes.titlesize": 10.5,
+            "axes.titleweight": "bold",
+            "figure.dpi": 600,
+            "savefig.dpi": 600,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(4.6, 5.5), dpi=600)
     fig.subplots_adjust(hspace=0.44, left=0.14, right=0.86, top=0.93, bottom=0.10)
 
@@ -379,31 +472,68 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
         time_k = np.array([k_sweep[str(k)]["time_s"] for k in avail_k])
 
         ax1_r = ax1.twinx()
-        l1 = ax1.plot(avail_k, acc_k, "-o", color="#00468B", lw=2.2, markersize=6, label="Test Accuracy (%)")
-        l2 = ax1_r.plot(avail_k, time_k, "--s", color="#D55E00", lw=1.9, markersize=5.5, label="Runtime (s/epoch)")
+        l1 = ax1.plot(
+            avail_k,
+            acc_k,
+            "-o",
+            color="#00468B",
+            lw=2.2,
+            markersize=6,
+            label="Test Accuracy (%)",
+        )
+        l2 = ax1_r.plot(
+            avail_k,
+            time_k,
+            "--s",
+            color="#D55E00",
+            lw=1.9,
+            markersize=5.5,
+            label="Runtime (s/epoch)",
+        )
         if 3 in avail_k:
             idx3 = avail_k.index(3)
             ax1.axvline(3, color="#009E73", ls="-.", lw=1.2)
             ax1.annotate(
                 f"Default $K=3$\n({acc_k[idx3]:.2f}%, {time_k[idx3]:.1f}s)",
-                xy=(3, acc_k[idx3]), xytext=(1.15, max(acc_k) - 0.22),
-                fontsize=7.8, bbox={"boxstyle": "round,pad=0.28", "facecolor": "#F4F7FB", "edgecolor": "#99B2CC"},
+                xy=(3, acc_k[idx3]),
+                xytext=(1.15, max(acc_k) - 0.22),
+                fontsize=7.8,
+                bbox={
+                    "boxstyle": "round,pad=0.28",
+                    "facecolor": "#F4F7FB",
+                    "edgecolor": "#99B2CC",
+                },
                 arrowprops={"arrowstyle": "->", "color": "#00468B", "lw": 1.0},
             )
         ax1.set_title(r"(a) Trade-off Across NS Depth $K$ (CIFAR-10)")
         ax1.set_xlabel(r"Newton-Schulz Iteration Depth $K$")
         ax1.set_ylabel("Top-1 Accuracy (%)", color="#00468B")
         ax1_r.set_ylabel("Runtime (s/epoch)", color="#D55E00")
-        ax1.set_xticks(avail_k); ax1.grid(True, ls="--")
+        ax1.set_xticks(avail_k)
+        ax1.grid(True, ls="--")
         lines = l1 + l2
-        ax1.legend(lines, [l.get_label() for l in lines], loc="lower right", fontsize=7.8)
+        ax1.legend(
+            lines, [l.get_label() for l in lines], loc="lower right", fontsize=7.8
+        )
     else:
-        ax1.text(0.5, 0.5, "K-depth sweep recorded during training", ha="center", va="center", transform=ax1.transAxes)
+        ax1.text(
+            0.5,
+            0.5,
+            "K-depth sweep recorded during training",
+            ha="center",
+            va="center",
+            transform=ax1.transAxes,
+        )
 
     # Panel 3(b): LR sensitivity
     lrs = [r"$10^{-4}$", r"$3\times 10^{-4}$", r"$10^{-3}$", r"$3\times 10^{-3}$"]
-    x = np.arange(len(lrs)); w = 0.25
-    has_lr = lr_sweep and all(k in lr_sweep for k in ["adamw", "muon", "titan"]) and all(len(lr_sweep[k]) == 4 for k in ["adamw", "muon", "titan"])
+    x = np.arange(len(lrs))
+    w = 0.25
+    has_lr = (
+        lr_sweep
+        and all(k in lr_sweep for k in ["adamw", "muon", "titan"])
+        and all(len(lr_sweep[k]) == 4 for k in ["adamw", "muon", "titan"])
+    )
     if has_lr:
         a_aw = lr_sweep["adamw"]
         a_mu = lr_sweep["muon"]
@@ -411,20 +541,43 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
         delta_mu = max(a_mu) - min(a_mu)
         delta_ti = max(a_ti) - min(a_ti)
         ax2.bar(x - w, a_aw, width=w, color="#009E73", alpha=0.88, label="AdamW")
-        ax2.bar(x, a_mu, width=w, color="#D55E00", alpha=0.88, label=rf"Muon ($\Delta={delta_mu:.1f}\%$)")
-        ax2.bar(x + w, a_ti, width=w, color="#00468B", alpha=0.95, label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)")
+        ax2.bar(
+            x,
+            a_mu,
+            width=w,
+            color="#D55E00",
+            alpha=0.88,
+            label=rf"Muon ($\Delta={delta_mu:.1f}\%$)",
+        )
+        ax2.bar(
+            x + w,
+            a_ti,
+            width=w,
+            color="#00468B",
+            alpha=0.95,
+            label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)",
+        )
         ax2.set_title("(b) Learning-Rate Robustness (ResNet-18)")
         ax2.set_xlabel(r"Base Learning Rate $\eta$")
         ax2.set_ylabel("CIFAR-10 Accuracy (%)")
-        ax2.set_xticks(x); ax2.set_xticklabels(lrs)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(lrs)
         ax2.grid(True, ls="--", axis="y")
         ax2.legend(loc="upper center", ncol=3, fontsize=7.8)
     else:
-        ax2.text(0.5, 0.5, "LR sweep recorded during training", ha="center", va="center", transform=ax2.transAxes)
+        ax2.text(
+            0.5,
+            0.5,
+            "LR sweep recorded during training",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+        )
 
     fig_png = os.path.join(output_dir, "Fig3_NS_Depth_Tradeoff_and_LR_Sensitivity.png")
     fig_pdf = os.path.join(output_dir, "Fig3_NS_Depth_Tradeoff_and_LR_Sensitivity.pdf")
-    fig.savefig(fig_png, dpi=600); fig.savefig(fig_pdf)
+    fig.savefig(fig_png, dpi=600)
+    fig.savefig(fig_pdf)
     plt.close(fig)
 
     # Standalone Fig. 3(a): Newton-Schulz Iteration Depth Trade-off
@@ -432,26 +585,58 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
     fig3a.subplots_adjust(left=0.14, right=0.86, top=0.90, bottom=0.16)
     if has_k:
         ax3a_r = ax3a.twinx()
-        l1a = ax3a.plot(avail_k, acc_k, "-o", color="#00468B", lw=2.2, markersize=6, label="Test Accuracy (%)")
-        l2a = ax3a_r.plot(avail_k, time_k, "--s", color="#D55E00", lw=1.9, markersize=5.5, label="Runtime (s/epoch)")
+        l1a = ax3a.plot(
+            avail_k,
+            acc_k,
+            "-o",
+            color="#00468B",
+            lw=2.2,
+            markersize=6,
+            label="Test Accuracy (%)",
+        )
+        l2a = ax3a_r.plot(
+            avail_k,
+            time_k,
+            "--s",
+            color="#D55E00",
+            lw=1.9,
+            markersize=5.5,
+            label="Runtime (s/epoch)",
+        )
         if 3 in avail_k:
             idx3 = avail_k.index(3)
             ax3a.axvline(3, color="#009E73", ls="-.", lw=1.2)
             ax3a.annotate(
                 f"Default $K=3$\n({acc_k[idx3]:.2f}%, {time_k[idx3]:.1f}s)",
-                xy=(3, acc_k[idx3]), xytext=(1.15, max(acc_k) - 0.22),
-                fontsize=7.8, bbox={"boxstyle": "round,pad=0.28", "facecolor": "#F4F7FB", "edgecolor": "#99B2CC"},
+                xy=(3, acc_k[idx3]),
+                xytext=(1.15, max(acc_k) - 0.22),
+                fontsize=7.8,
+                bbox={
+                    "boxstyle": "round,pad=0.28",
+                    "facecolor": "#F4F7FB",
+                    "edgecolor": "#99B2CC",
+                },
                 arrowprops={"arrowstyle": "->", "color": "#00468B", "lw": 1.0},
             )
         ax3a.set_title(r"Trade-off Across NS Depth $K$ (CIFAR-10)")
         ax3a.set_xlabel(r"Newton-Schulz Iteration Depth $K$")
         ax3a.set_ylabel("Top-1 Accuracy (%)", color="#00468B")
         ax3a_r.set_ylabel("Runtime (s/epoch)", color="#D55E00")
-        ax3a.set_xticks(avail_k); ax3a.grid(True, ls="--")
+        ax3a.set_xticks(avail_k)
+        ax3a.grid(True, ls="--")
         lines_a = l1a + l2a
-        ax3a.legend(lines_a, [l.get_label() for l in lines_a], loc="lower right", fontsize=7.8)
+        ax3a.legend(
+            lines_a, [l.get_label() for l in lines_a], loc="lower right", fontsize=7.8
+        )
     else:
-        ax3a.text(0.5, 0.5, "K-depth sweep recorded during training", ha="center", va="center", transform=ax3a.transAxes)
+        ax3a.text(
+            0.5,
+            0.5,
+            "K-depth sweep recorded during training",
+            ha="center",
+            va="center",
+            transform=ax3a.transAxes,
+        )
     fig3a.savefig(os.path.join(output_dir, "Fig3a_NS_Depth_Tradeoff.png"), dpi=600)
     fig3a.savefig(os.path.join(output_dir, "Fig3a_NS_Depth_Tradeoff.pdf"))
     plt.close(fig3a)
@@ -461,16 +646,38 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
     fig3b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
     if has_lr:
         ax3b.bar(x - w, a_aw, width=w, color="#009E73", alpha=0.88, label="AdamW")
-        ax3b.bar(x, a_mu, width=w, color="#D55E00", alpha=0.88, label=rf"Muon ($\Delta={delta_mu:.1f}\%$)")
-        ax3b.bar(x + w, a_ti, width=w, color="#00468B", alpha=0.95, label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)")
+        ax3b.bar(
+            x,
+            a_mu,
+            width=w,
+            color="#D55E00",
+            alpha=0.88,
+            label=rf"Muon ($\Delta={delta_mu:.1f}\%$)",
+        )
+        ax3b.bar(
+            x + w,
+            a_ti,
+            width=w,
+            color="#00468B",
+            alpha=0.95,
+            label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)",
+        )
         ax3b.set_title("Learning-Rate Robustness (ResNet-18)")
         ax3b.set_xlabel(r"Base Learning Rate $\eta$")
         ax3b.set_ylabel("CIFAR-10 Accuracy (%)")
-        ax3b.set_xticks(x); ax3b.set_xticklabels(lrs)
+        ax3b.set_xticks(x)
+        ax3b.set_xticklabels(lrs)
         ax3b.grid(True, ls="--", axis="y")
         ax3b.legend(loc="upper center", ncol=3, fontsize=7.8)
     else:
-        ax3b.text(0.5, 0.5, "LR sweep recorded during training", ha="center", va="center", transform=ax3b.transAxes)
+        ax3b.text(
+            0.5,
+            0.5,
+            "LR sweep recorded during training",
+            ha="center",
+            va="center",
+            transform=ax3b.transAxes,
+        )
     fig3b.savefig(os.path.join(output_dir, "Fig3b_LR_Sensitivity.png"), dpi=600)
     fig3b.savefig(os.path.join(output_dir, "Fig3b_LR_Sensitivity.pdf"))
     plt.close(fig3b)
@@ -491,26 +698,35 @@ def train_and_eval(model, opt, tr_l, te_l, epochs, device, desc=""):
             opt.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                 loss = criterion(model(x), y)
-            scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
             loss_val = loss.item()
-        if device.type == "cuda": torch.cuda.synchronize()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
         ep_secs.append(time.perf_counter() - t0)
         sched.step()
-        print(f"  [{desc}] Epoch {ep+1}/{epochs} - Loss: {loss_val:.4f} | Time: {ep_secs[-1]:.2f}s", flush=True)
+        print(
+            f"  [{desc}] Epoch {ep + 1}/{epochs} - Loss: {loss_val:.4f} | Time: {ep_secs[-1]:.2f}s",
+            flush=True,
+        )
 
     model.eval()
     c, tot = 0, 0
     with torch.no_grad():
         for x, y in te_l:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            c += model(x).argmax(1).eq(y).sum().item(); tot += y.size(0)
+            c += model(x).argmax(1).eq(y).sum().item()
+            tot += y.size(0)
     acc = 100.0 * c / max(1, tot)
     return acc, float(np.mean(ep_secs)) if ep_secs else 0.0
 
 
 # ====================== MAIN EXECUTION ======================================
 def main():
-    parser = argparse.ArgumentParser(description="TITAN Exp 3: Table IV Ablations & Fig 3 Sweeps")
+    parser = argparse.ArgumentParser(
+        description="TITAN Exp 3: Table IV Ablations & Fig 3 Sweeps"
+    )
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="./outputs_exp3")
     parser.add_argument("--epochs-c10", type=int, default=100)
@@ -528,7 +744,9 @@ def main():
         if os.path.exists(out_json):
             with open(out_json, encoding="utf-8") as f:
                 saved = json.load(f)
-            save_exp3_publication_figure(args.output_dir, saved.get("k_sweep", {}), saved.get("lr_sweep", {}))
+            save_exp3_publication_figure(
+                args.output_dir, saved.get("k_sweep", {}), saved.get("lr_sweep", {})
+            )
             print(f"[Exp 3] Figure 3 regenerated from {out_json}", flush=True)
         else:
             save_exp3_publication_figure(args.output_dir, {}, {})
@@ -540,15 +758,38 @@ def main():
     batch_size = 64 if args.quick else args.batch_size
 
     device = get_safe_device()
-    num_gpus = torch.cuda.device_count() if (device.type == "cuda" and torch.cuda.is_available()) else 0
-    print(f"[Exp 3] Device: {device} | GPUs: {num_gpus} | C10 Ep: {epochs_c10} | FM Ep: {epochs_fm}", flush=True)
+    num_gpus = (
+        torch.cuda.device_count()
+        if (device.type == "cuda" and torch.cuda.is_available())
+        else 0
+    )
+    print(
+        f"[Exp 3] Device: {device} | GPUs: {num_gpus} | C10 Ep: {epochs_c10} | FM Ep: {epochs_fm}",
+        flush=True,
+    )
 
     variants = [
         ("TITAN (Full)", lambda p, lr: TITAN(p, lr=lr, weight_decay=1e-4, ns_steps=3)),
-        ("TITANAdaptive", lambda p, lr: TITANAdaptive(p, lr=lr, weight_decay=1e-4, ns_steps=3)),
-        ("- Newton-Schulz", lambda p, lr: TITANAblation(p, lr=lr, weight_decay=1e-4, use_ns=False)),
-        ("- RMS/Polar Norm", lambda p, lr: TITANAblation(p, lr=lr, weight_decay=1e-4, use_rms_norm=False)),
-        ("- Momentum", lambda p, lr: TITANAblation(p, lr=lr, weight_decay=1e-4, use_momentum=False)),
+        (
+            "TITANAdaptive",
+            lambda p, lr: TITANAdaptive(p, lr=lr, weight_decay=1e-4, ns_steps=3),
+        ),
+        (
+            "- Newton-Schulz",
+            lambda p, lr: TITANAblation(p, lr=lr, weight_decay=1e-4, use_ns=False),
+        ),
+        (
+            "- RMS/Polar Norm",
+            lambda p, lr: TITANAblation(
+                p, lr=lr, weight_decay=1e-4, use_rms_norm=False
+            ),
+        ),
+        (
+            "- Momentum",
+            lambda p, lr: TITANAblation(
+                p, lr=lr, weight_decay=1e-4, use_momentum=False
+            ),
+        ),
         ("Muon Baseline", lambda p, lr: MuonBaseline(p, lr=lr, weight_decay=1e-4)),
     ]
     if args.quick:
@@ -560,55 +801,119 @@ def main():
             with open(out_json, encoding="utf-8") as f:
                 results = json.load(f)
         except (json.JSONDecodeError, OSError):
-            results = {"table4_fmnist": {}, "table4_cifar10": {}, "k_sweep": {}, "lr_sweep": {}}
+            results = {
+                "table4_fmnist": {},
+                "table4_cifar10": {},
+                "k_sweep": {},
+                "lr_sweep": {},
+            }
 
     # 1. Fashion-MNIST LeNet-5 Ablations (Table IV)
     mean_fm, std_fm = (0.2860,), (0.3530,)
     tr_fm, _, te_fm = safe_fmnist(
         args.data_dir,
-        T.Compose([T.RandomCrop(28, padding=2), T.RandomHorizontalFlip(), T.ToTensor(), T.Normalize(mean_fm, std_fm)]),
-        T.Compose([T.ToTensor(), T.Normalize(mean_fm, std_fm)])
+        T.Compose(
+            [
+                T.RandomCrop(28, padding=2),
+                T.RandomHorizontalFlip(),
+                T.ToTensor(),
+                T.Normalize(mean_fm, std_fm),
+            ]
+        ),
+        T.Compose([T.ToTensor(), T.Normalize(mean_fm, std_fm)]),
     )
     n_fm = len(tr_fm)
     sub_n_fm = 800 if args.quick else n_fm
-    tr_l_fm = DataLoader(Subset(tr_fm, np.arange(sub_n_fm)), batch_size=batch_size, shuffle=True, num_workers=0)
-    te_l_fm = DataLoader(Subset(te_fm, np.arange(min(400, len(te_fm)))) if args.quick else te_fm, batch_size=batch_size, shuffle=False, num_workers=0)
+    tr_l_fm = DataLoader(
+        Subset(tr_fm, np.arange(sub_n_fm)),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+    )
+    te_l_fm = DataLoader(
+        Subset(te_fm, np.arange(min(400, len(te_fm)))) if args.quick else te_fm,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
 
     for v_name, opt_fn in variants:
         accs, times = [], []
         for r in range(runs):
             torch.manual_seed(42 + r * 100)
             model = LeNet5(10).to(device)
-            acc, sec = train_and_eval(model, opt_fn(model.parameters(), 1e-3), tr_l_fm, te_l_fm, epochs_fm, device, desc=f"FMNIST {v_name}")
-            accs.append(acc); times.append(sec)
+            acc, sec = train_and_eval(
+                model,
+                opt_fn(model.parameters(), 1e-3),
+                tr_l_fm,
+                te_l_fm,
+                epochs_fm,
+                device,
+                desc=f"FMNIST {v_name}",
+            )
+            accs.append(acc)
+            times.append(sec)
         results["table4_fmnist"][v_name] = {
             "acc_mean": float(np.mean(accs)),
             "acc_std": float(np.std(accs, ddof=1)) if len(accs) > 1 else 0.0,
             "time_s": float(np.mean(times)),
         }
-        print(f"[Table IV FMNIST | {v_name}] Acc={np.mean(accs):.2f}% | Time={np.mean(times):.2f}s", flush=True)
-        with open(out_json, "w") as f: json.dump(results, f, indent=2)
+        print(
+            f"[Table IV FMNIST | {v_name}] Acc={np.mean(accs):.2f}% | Time={np.mean(times):.2f}s",
+            flush=True,
+        )
+        with open(out_json, "w") as f:
+            json.dump(results, f, indent=2)
 
     # 2. CIFAR-10 ResNet-18 Ablations (Table IV)
     mean_c, std_c = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
     tr_c10, _, te_c10 = safe_cifar10(
         args.data_dir,
-        T.Compose([T.RandomCrop(32, padding=4), T.RandomHorizontalFlip(), T.ToTensor(), T.Normalize(mean_c, std_c)]),
+        T.Compose(
+            [
+                T.RandomCrop(32, padding=4),
+                T.RandomHorizontalFlip(),
+                T.ToTensor(),
+                T.Normalize(mean_c, std_c),
+            ]
+        ),
         T.Compose([T.ToTensor(), T.Normalize(mean_c, std_c)]),
-        quick=args.quick
+        quick=args.quick,
     )
     n_c10 = len(tr_c10)
     sub_n_c10 = 128 if args.quick else n_c10
-    tr_l_c10 = DataLoader(Subset(tr_c10, np.arange(sub_n_c10)), batch_size=batch_size, shuffle=True, num_workers=0)
-    te_l_c10 = DataLoader(Subset(te_c10, np.arange(min(64, len(te_c10)))) if args.quick else te_c10, batch_size=batch_size, shuffle=False, num_workers=0)
+    tr_l_c10 = DataLoader(
+        Subset(tr_c10, np.arange(sub_n_c10)),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+    )
+    te_l_c10 = DataLoader(
+        Subset(te_c10, np.arange(min(64, len(te_c10)))) if args.quick else te_c10,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
 
     for v_name, opt_fn in variants:
         torch.manual_seed(42)
         model = ResNet18CIFAR(10).to(device)
-        acc, sec = train_and_eval(model, opt_fn(model.parameters(), 1e-3), tr_l_c10, te_l_c10, epochs_c10, device, desc=f"C10 {v_name}")
+        acc, sec = train_and_eval(
+            model,
+            opt_fn(model.parameters(), 1e-3),
+            tr_l_c10,
+            te_l_c10,
+            epochs_c10,
+            device,
+            desc=f"C10 {v_name}",
+        )
         results["table4_cifar10"][v_name] = {"acc": acc, "time_s": sec}
-        print(f"[Table IV CIFAR-10 | {v_name}] Acc={acc:.2f}% | Time={sec:.2f}s", flush=True)
-        with open(out_json, "w") as f: json.dump(results, f, indent=2)
+        print(
+            f"[Table IV CIFAR-10 | {v_name}] Acc={acc:.2f}% | Time={sec:.2f}s",
+            flush=True,
+        )
+        with open(out_json, "w") as f:
+            json.dump(results, f, indent=2)
 
     # 3. K-sweep (Fig 3a)
     k_list = [1, 3] if args.quick else [1, 2, 3, 4, 5, 7]
@@ -616,10 +921,13 @@ def main():
         torch.manual_seed(42)
         model = ResNet18CIFAR(10).to(device)
         opt = TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4, ns_steps=k)
-        acc, sec = train_and_eval(model, opt, tr_l_c10, te_l_c10, epochs_c10, device, desc=f"K={k}")
+        acc, sec = train_and_eval(
+            model, opt, tr_l_c10, te_l_c10, epochs_c10, device, desc=f"K={k}"
+        )
         results["k_sweep"][str(k)] = {"acc": acc, "time_s": sec}
         print(f"[Fig 3a K={k}] Acc={acc:.2f}% | Time={sec:.2f}s", flush=True)
-        with open(out_json, "w") as f: json.dump(results, f, indent=2)
+        with open(out_json, "w") as f:
+            json.dump(results, f, indent=2)
 
     # 4. LR-sweep (Fig 3b)
     lrs = [1e-4, 1e-3] if args.quick else [1e-4, 3e-4, 1e-3, 3e-3]
@@ -629,15 +937,34 @@ def main():
         for lr_val in lrs:
             torch.manual_seed(42)
             model = ResNet18CIFAR(10).to(device)
-            if opt_key == "titan": opt = TITAN(model.parameters(), lr=lr_val, weight_decay=1e-4)
-            elif opt_key == "muon": opt = MuonBaseline(model.parameters(), lr=lr_val, weight_decay=1e-4)
-            else: opt = torch.optim.AdamW(model.parameters(), lr=lr_val, weight_decay=1e-4)
-            acc, _ = train_and_eval(model, opt, tr_l_c10, te_l_c10, epochs_c10, device, desc=f"{opt_key} lr={lr_val}")
+            if opt_key == "titan":
+                opt = TITAN(model.parameters(), lr=lr_val, weight_decay=1e-4)
+            elif opt_key == "muon":
+                opt = MuonBaseline(model.parameters(), lr=lr_val, weight_decay=1e-4)
+            else:
+                opt = torch.optim.AdamW(
+                    model.parameters(), lr=lr_val, weight_decay=1e-4
+                )
+            acc, _ = train_and_eval(
+                model,
+                opt,
+                tr_l_c10,
+                te_l_c10,
+                epochs_c10,
+                device,
+                desc=f"{opt_key} lr={lr_val}",
+            )
             results["lr_sweep"][opt_key].append(acc)
-            print(f"[Fig 3b LR Sweep | {opt_key.upper()} | lr={lr_val}] Acc={acc:.2f}%", flush=True)
-        with open(out_json, "w") as f: json.dump(results, f, indent=2)
+            print(
+                f"[Fig 3b LR Sweep | {opt_key.upper()} | lr={lr_val}] Acc={acc:.2f}%",
+                flush=True,
+            )
+        with open(out_json, "w") as f:
+            json.dump(results, f, indent=2)
 
-    save_exp3_publication_figure(args.output_dir, results["k_sweep"], results["lr_sweep"])
+    save_exp3_publication_figure(
+        args.output_dir, results["k_sweep"], results["lr_sweep"]
+    )
     print(f"\n[Exp 3 Complete] Results saved to {out_json}", flush=True)
 
 

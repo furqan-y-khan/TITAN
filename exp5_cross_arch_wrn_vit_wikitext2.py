@@ -107,13 +107,13 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
         )
     try:
         full_tr = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=(not has_local), transform=tr_tf
+            root=data_dir, train=True, download=True, transform=tr_tf
         )
         val_base = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=False, transform=te_tf
+            root=data_dir, train=True, download=True, transform=te_tf
         )
         te_set = torchvision.datasets.CIFAR10(
-            root=data_dir, train=False, download=(not has_local), transform=te_tf
+            root=data_dir, train=False, download=True, transform=te_tf
         )
         return full_tr, val_base, te_set
     except (RuntimeError, OSError, ValueError) as e:
@@ -136,13 +136,13 @@ def safe_fmnist(data_dir: str, tr_tf, te_tf, seed: int = 42):
     )
     try:
         full_tr = torchvision.datasets.FashionMNIST(
-            root=data_dir, train=True, download=(not has_local), transform=tr_tf
+            root=data_dir, train=True, download=True, transform=tr_tf
         )
         val_base = torchvision.datasets.FashionMNIST(
-            root=data_dir, train=True, download=False, transform=te_tf
+            root=data_dir, train=True, download=True, transform=te_tf
         )
         te_set = torchvision.datasets.FashionMNIST(
-            root=data_dir, train=False, download=(not has_local), transform=te_tf
+            root=data_dir, train=False, download=True, transform=te_tf
         )
         return full_tr, val_base, te_set
     except (RuntimeError, OSError, ValueError) as e:
@@ -384,7 +384,10 @@ class TransformerLM(nn.Module):
 
 # ====================== PUBLICATION FIGURE 4(b) =============================
 def save_exp5_publication_figure(
-    output_dir: str, res: dict | None = None, r18_acc: dict | None = None, r50_acc: dict | None = None
+    output_dir: str,
+    res: dict | None = None,
+    r18_acc: dict | None = None,
+    r50_acc: dict | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     plt.rcParams.update(
@@ -446,7 +449,12 @@ def save_exp5_publication_figure(
     if active_benchmarks:
         arch_names = [b[0] for b in active_benchmarks]
         x_idx = np.arange(len(arch_names))
-        all_vals = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
+        all_vals = [
+            b[1][k]
+            for b in active_benchmarks
+            for k, _, _, _ in target_opts
+            if k in b[1]
+        ]
 
         for opt_key, opt_label, opt_col, offset in target_opts:
             bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
@@ -486,7 +494,7 @@ def save_exp5_publication_figure(
 def save_exp5_ppl_figure(output_dir: str, ppl_curves: dict):
     """Fig. 5 — WikiText-2 causal-LM validation perplexity convergence curves."""
     if not ppl_curves or not any(len(v) > 0 for v in ppl_curves.values()):
-        return   # nothing to plot yet
+        return  # nothing to plot yet
     os.makedirs(output_dir, exist_ok=True)
     plt.rcParams.update(
         {
@@ -570,7 +578,9 @@ def main():
                 vals = [
                     seed_dict[k]["acc_mean"]
                     for seed_dict in table1.values()
-                    if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+                    if isinstance(seed_dict, dict)
+                    and k in seed_dict
+                    and "acc_mean" in seed_dict[k]
                 ]
                 if vals:
                     r18_acc[k] = float(np.mean(vals))
@@ -615,15 +625,23 @@ def main():
         flush=True,
     )
 
-    results = {"wrn28_10_fmnist": {}, "vit_b16_cifar10": {}, "wikitext2_perplexity": {},
-               "wikitext2_ppl_curves": {}}
+    results = {
+        "wrn28_10_fmnist": {},
+        "vit_b16_cifar10": {},
+        "wikitext2_perplexity": {},
+        "wikitext2_ppl_curves": {},
+    }
     if os.path.exists(out_json):
         try:
             with open(out_json, encoding="utf-8") as f:
                 results = json.load(f)
         except (json.JSONDecodeError, OSError):
-            results = {"wrn28_10_fmnist": {}, "vit_b16_cifar10": {}, "wikitext2_perplexity": {},
-               "wikitext2_ppl_curves": {}}
+            results = {
+                "wrn28_10_fmnist": {},
+                "vit_b16_cifar10": {},
+                "wikitext2_perplexity": {},
+                "wikitext2_ppl_curves": {},
+            }
 
     # 1. WRN-28-10 on Fashion-MNIST
     mean_fm, std_fm = (0.2860,), (0.3530,)

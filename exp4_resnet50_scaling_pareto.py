@@ -108,13 +108,13 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
         )
     try:
         full_tr = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=(not has_local), transform=tr_tf
+            root=data_dir, train=True, download=True, transform=tr_tf
         )
         val_base = torchvision.datasets.CIFAR10(
-            root=data_dir, train=True, download=False, transform=te_tf
+            root=data_dir, train=True, download=True, transform=te_tf
         )
         te_set = torchvision.datasets.CIFAR10(
-            root=data_dir, train=False, download=(not has_local), transform=te_tf
+            root=data_dir, train=False, download=True, transform=te_tf
         )
         return full_tr, val_base, te_set
     except (RuntimeError, OSError, ValueError) as e:
@@ -283,7 +283,9 @@ class ResNet50CIFAR(nn.Module):
 
 # ====================== PUBLICATION FIGURE 4 ================================
 def save_exp4_publication_figure(
-    output_dir: str, table3_res: dict | None = None, exp5_res: dict | None = None,
+    output_dir: str,
+    table3_res: dict | None = None,
+    exp5_res: dict | None = None,
     r18_acc: dict | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
@@ -373,19 +375,37 @@ def save_exp4_publication_figure(
     r50_dict = {}
     if table3_res:
         for k in ["adamw", "muon", "titan"]:
-            if k in table3_res and isinstance(table3_res[k], dict) and "acc" in table3_res[k]:
+            if (
+                k in table3_res
+                and isinstance(table3_res[k], dict)
+                and "acc" in table3_res[k]
+            ):
                 r50_dict[k] = float(table3_res[k]["acc"])
 
     wrn_dict = {}
-    if exp5_res and "wrn28_10_fmnist" in exp5_res and isinstance(exp5_res["wrn28_10_fmnist"], dict):
+    if (
+        exp5_res
+        and "wrn28_10_fmnist" in exp5_res
+        and isinstance(exp5_res["wrn28_10_fmnist"], dict)
+    ):
         for k in ["adamw", "muon", "titan"]:
-            if k in exp5_res["wrn28_10_fmnist"] and exp5_res["wrn28_10_fmnist"][k] is not None:
+            if (
+                k in exp5_res["wrn28_10_fmnist"]
+                and exp5_res["wrn28_10_fmnist"][k] is not None
+            ):
                 wrn_dict[k] = float(exp5_res["wrn28_10_fmnist"][k])
 
     vit_dict = {}
-    if exp5_res and "vit_b16_cifar10" in exp5_res and isinstance(exp5_res["vit_b16_cifar10"], dict):
+    if (
+        exp5_res
+        and "vit_b16_cifar10" in exp5_res
+        and isinstance(exp5_res["vit_b16_cifar10"], dict)
+    ):
         for k in ["adamw", "muon", "titan"]:
-            if k in exp5_res["vit_b16_cifar10"] and exp5_res["vit_b16_cifar10"][k] is not None:
+            if (
+                k in exp5_res["vit_b16_cifar10"]
+                and exp5_res["vit_b16_cifar10"][k] is not None
+            ):
                 vit_dict[k] = float(exp5_res["vit_b16_cifar10"][k])
 
     candidate_benchmarks = [
@@ -406,11 +426,18 @@ def save_exp4_publication_figure(
     if active_benchmarks:
         arch_names = [b[0] for b in active_benchmarks]
         x_idx = np.arange(len(arch_names))
-        all_vals = [b[1][k] for b in active_benchmarks for k, _, _, _ in target_opts if k in b[1]]
+        all_vals = [
+            b[1][k]
+            for b in active_benchmarks
+            for k, _, _, _ in target_opts
+            if k in b[1]
+        ]
 
         for opt_key, opt_label, opt_col, offset in target_opts:
             bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
-            ax2.bar(x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label)
+            ax2.bar(
+                x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label
+            )
 
         ax2.set_title("(b) Cross-Architecture Generalization")
         ax2.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
@@ -474,8 +501,17 @@ def save_exp4_publication_figure(
         ax4a.grid(True, ls="--")
         ax4a.legend(loc="lower left", fontsize=7.6)
     else:
-        ax4a.text(0.5, 0.5, "ResNet-50 Pareto results recorded during training", ha="center", va="center", transform=ax4a.transAxes)
-    fig4a.savefig(os.path.join(output_dir, "Fig4a_ResNet50_Pareto_Frontier.png"), dpi=600)
+        ax4a.text(
+            0.5,
+            0.5,
+            "ResNet-50 Pareto results recorded during training",
+            ha="center",
+            va="center",
+            transform=ax4a.transAxes,
+        )
+    fig4a.savefig(
+        os.path.join(output_dir, "Fig4a_ResNet50_Pareto_Frontier.png"), dpi=600
+    )
     fig4a.savefig(os.path.join(output_dir, "Fig4a_ResNet50_Pareto_Frontier.pdf"))
     plt.close(fig4a)
 
@@ -485,7 +521,9 @@ def save_exp4_publication_figure(
     if active_benchmarks:
         for opt_key, opt_label, opt_col, offset in target_opts:
             bar_heights = [b[1].get(opt_key, np.nan) for b in active_benchmarks]
-            ax4b.bar(x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label)
+            ax4b.bar(
+                x_idx + offset, bar_heights, width=w, color=opt_col, label=opt_label
+            )
 
         ax4b.set_title("Cross-Architecture Generalization")
         ax4b.set_xlabel("Backbone Architecture & Benchmark", labelpad=5)
@@ -493,7 +531,9 @@ def save_exp4_publication_figure(
         ax4b.set_xticks(x_idx)
         ax4b.set_xticklabels(arch_names)
         if all_vals:
-            ax4b.set_ylim(max(0.0, min(all_vals) - 2.5), min(100.0, max(all_vals) + 2.5))
+            ax4b.set_ylim(
+                max(0.0, min(all_vals) - 2.5), min(100.0, max(all_vals) + 2.5)
+            )
         ax4b.grid(True, ls="--", axis="y")
         ax4b.legend(loc="upper left", ncol=3, fontsize=7.8)
     else:
@@ -509,8 +549,12 @@ def save_exp4_publication_figure(
         ax4b.set_title("Cross-Architecture Generalization")
         ax4b.set_xticks([])
         ax4b.set_yticks([])
-    fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.png"), dpi=600)
-    fig4b.savefig(os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.pdf"))
+    fig4b.savefig(
+        os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.png"), dpi=600
+    )
+    fig4b.savefig(
+        os.path.join(output_dir, "Fig4b_Cross_Architecture_Generalization.pdf")
+    )
     plt.close(fig4b)
 
 
@@ -559,7 +603,9 @@ def main():
                 vals = [
                     seed_dict[k]["acc_mean"]
                     for seed_dict in table1.values()
-                    if isinstance(seed_dict, dict) and k in seed_dict and "acc_mean" in seed_dict[k]
+                    if isinstance(seed_dict, dict)
+                    and k in seed_dict
+                    and "acc_mean" in seed_dict[k]
                 ]
                 if vals:
                     r18_acc[k] = float(np.mean(vals))
