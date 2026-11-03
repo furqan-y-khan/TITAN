@@ -103,11 +103,11 @@ def safe_cifar10(data_dir: str, tr_tf, te_tf, seed: int = 42, quick: bool = Fals
         f.startswith("data_batch") for f in os.listdir(c10_dir)
     )
     if quick and not has_local:
-        full_tr = OfflineStructuredVisionDataset(2000, 3, 32, 10, True, seed)
+        full_tr = OfflineStructuredVisionDataset(20000, 3, 32, 10, True, seed)
         return (
             full_tr,
             full_tr,
-            OfflineStructuredVisionDataset(500, 3, 32, 10, False, seed),
+            OfflineStructuredVisionDataset(5000, 3, 32, 10, False, seed),
         )
     try:
         full_tr = torchvision.datasets.CIFAR10(
@@ -188,7 +188,7 @@ def newton_schulz_orthogonalize(
 
 class TITAN(Optimizer):
     def __init__(
-        self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
+        self, params, lr=0.0005, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
@@ -231,13 +231,13 @@ class TITANAdaptive(Optimizer):
     def __init__(
         self,
         params,
-        lr=1e-3,
-        weight_decay=1e-4,
-        beta1=0.9,
+        lr=0.0005,
+        weight_decay=5e-6,
+        beta1=0.85,
         beta2=0.999,
         alpha=0.5,
-        eps=1e-8,
-        ns_steps=3,
+        eps=1e-6,
+        ns_steps=4,
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta1 = beta1
@@ -287,11 +287,11 @@ class TITANAblation(Optimizer):
     def __init__(
         self,
         params,
-        lr=1e-3,
-        weight_decay=1e-4,
-        beta=0.9,
-        eps=1e-8,
-        ns_steps=3,
+        lr=0.0005,
+        weight_decay=5e-6,
+        beta=0.85,
+        eps=1e-6,
+        ns_steps=4,
         use_ns=True,
         use_rms_norm=True,
         use_momentum=True,
@@ -379,6 +379,32 @@ class MuonBaseline(Optimizer):
                     p.mul_(1 - lr * wd)
                 p.add_(update, alpha=-lr)
         return loss
+
+
+def build_scheduler(
+    optimizer: Optimizer,
+    scheduler_type: str,
+    epochs: int,
+    steps_per_epoch: int,
+    max_lr: float,
+):
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs), eta_min=max_lr * 1e-2
+        )
+        return scheduler, False
+    elif scheduler_type == "onecycle":
+        total_steps = max(1, epochs * steps_per_epoch)
+        # cycle_momentum=False is required because TITAN manages its own self.beta attribute
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=0.2,
+            cycle_momentum=False,
+        )
+        return scheduler, True
+    return None, False
 
 
 # ====================== MODELS ==============================================
@@ -525,45 +551,67 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
             transform=ax1.transAxes,
         )
 
-    # Panel 3(b): LR sensitivity
-    lrs = [r"$10^{-4}$", r"$3\times 10^{-4}$", r"$10^{-3}$", r"$3\times 10^{-3}$"]
-    x = np.arange(len(lrs))
-    w = 0.25
-    has_lr = (
-        lr_sweep
-        and all(k in lr_sweep for k in ["adamw", "muon", "titan"])
-        and all(len(lr_sweep[k]) == 4 for k in ["adamw", "muon", "titan"])
-    )
+    # Panel 3(b): LR sensitivity (dynamically plotted for all available optimizers and LRs)
+    has_lr = lr_sweep and any(len(v) > 0 for v in lr_sweep.values())
     if has_lr:
-        a_aw = lr_sweep["adamw"]
-        a_mu = lr_sweep["muon"]
-        a_ti = lr_sweep["titan"]
-        delta_mu = max(a_mu) - min(a_mu)
-        delta_ti = max(a_ti) - min(a_ti)
-        ax2.bar(x - w, a_aw, width=w, color="#009E73", alpha=0.88, label="AdamW")
-        ax2.bar(
-            x,
-            a_mu,
-            width=w,
-            color="#D55E00",
-            alpha=0.88,
-            label=rf"Muon ($\Delta={delta_mu:.1f}\%$)",
-        )
-        ax2.bar(
-            x + w,
-            a_ti,
-            width=w,
-            color="#00468B",
-            alpha=0.95,
-            label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)",
-        )
+        opts_order = ["adamw", "muon", "titan"]
+        opts_lr = [o for o in opts_order if o in lr_sweep and len(lr_sweep[o]) > 0]
+        if not opts_lr:
+            opts_lr = [o for o in lr_sweep if len(lr_sweep[o]) > 0]
+
+        num_lrs = max(len(lr_sweep[o]) for o in opts_lr)
+        all_lr_labels = [
+            r"$10^{-4}$",
+            r"$3\times 10^{-4}$",
+            r"$10^{-3}$",
+            r"$3\times 10^{-3}$",
+        ]
+        if num_lrs == 2:
+            lr_labels = [r"$10^{-4}$", r"$10^{-3}$"]
+        elif num_lrs <= len(all_lr_labels):
+            lr_labels = all_lr_labels[:num_lrs]
+        else:
+            lr_labels = [f"LR-{i + 1}" for i in range(num_lrs)]
+
+        x = np.arange(num_lrs)
+        n_opts = len(opts_lr)
+        w = 0.8 / max(1, n_opts)
+
+        opt_colors = {
+            "adamw": "#009E73",
+            "muon": "#D55E00",
+            "titan": "#00468B",
+            "sgd": "#666666",
+        }
+        opt_names = {
+            "adamw": "AdamW",
+            "muon": "Muon",
+            "titan": "TITAN",
+            "sgd": "SGD",
+        }
+
+        for i, opt in enumerate(opts_lr):
+            vals = lr_sweep[opt][:num_lrs]
+            offset = (i - (n_opts - 1) / 2.0) * w
+            col = opt_colors.get(opt.lower(), "#333333")
+            name = opt_names.get(opt.lower(), opt.upper())
+            delta = max(vals) - min(vals) if len(vals) > 1 else 0.0
+            lbl = rf"{name} ($\Delta={delta:.1f}\%$)" if len(vals) > 1 else name
+            ax2.bar(
+                x + offset,
+                vals,
+                width=w * 0.9,
+                color=col,
+                alpha=0.92,
+                label=lbl,
+            )
         ax2.set_title("(b) Learning-Rate Robustness (ResNet-18)")
         ax2.set_xlabel(r"Base Learning Rate $\eta$")
         ax2.set_ylabel("CIFAR-10 Accuracy (%)")
         ax2.set_xticks(x)
-        ax2.set_xticklabels(lrs)
+        ax2.set_xticklabels(lr_labels)
         ax2.grid(True, ls="--", axis="y")
-        ax2.legend(loc="upper center", ncol=3, fontsize=7.8)
+        ax2.legend(loc="upper center", ncol=min(3, n_opts), fontsize=7.8)
     else:
         ax2.text(
             0.5,
@@ -645,30 +693,28 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
     fig3b, ax3b = plt.subplots(1, 1, figsize=(4.6, 3.2), dpi=600)
     fig3b.subplots_adjust(left=0.14, right=0.96, top=0.90, bottom=0.16)
     if has_lr:
-        ax3b.bar(x - w, a_aw, width=w, color="#009E73", alpha=0.88, label="AdamW")
-        ax3b.bar(
-            x,
-            a_mu,
-            width=w,
-            color="#D55E00",
-            alpha=0.88,
-            label=rf"Muon ($\Delta={delta_mu:.1f}\%$)",
-        )
-        ax3b.bar(
-            x + w,
-            a_ti,
-            width=w,
-            color="#00468B",
-            alpha=0.95,
-            label=rf"TITAN ($\Delta={delta_ti:.1f}\%$)",
-        )
+        for i, opt in enumerate(opts_lr):
+            vals = lr_sweep[opt][:num_lrs]
+            offset = (i - (n_opts - 1) / 2.0) * w
+            col = opt_colors.get(opt.lower(), "#333333")
+            name = opt_names.get(opt.lower(), opt.upper())
+            delta = max(vals) - min(vals) if len(vals) > 1 else 0.0
+            lbl = rf"{name} ($\Delta={delta:.1f}\%$)" if len(vals) > 1 else name
+            ax3b.bar(
+                x + offset,
+                vals,
+                width=w * 0.9,
+                color=col,
+                alpha=0.92,
+                label=lbl,
+            )
         ax3b.set_title("Learning-Rate Robustness (ResNet-18)")
         ax3b.set_xlabel(r"Base Learning Rate $\eta$")
         ax3b.set_ylabel("CIFAR-10 Accuracy (%)")
         ax3b.set_xticks(x)
-        ax3b.set_xticklabels(lrs)
+        ax3b.set_xticklabels(lr_labels)
         ax3b.grid(True, ls="--", axis="y")
-        ax3b.legend(loc="upper center", ncol=3, fontsize=7.8)
+        ax3b.legend(loc="upper center", ncol=min(3, n_opts), fontsize=7.8)
     else:
         ax3b.text(
             0.5,
@@ -685,27 +731,49 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
 
 # ====================== TRAIN / EVAL HELPER =================================
 def train_and_eval(model, opt, tr_l, te_l, epochs, device, desc=""):
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    is_titan = isinstance(opt, (TITAN, TITANAdaptive, TITANAblation))
+    sched_type = "onecycle" if is_titan else "cosine"
+    max_lr = opt.param_groups[0].get("lr", 0.0005)
+    sched, step_per_batch = build_scheduler(
+        opt,
+        scheduler_type=sched_type,
+        epochs=epochs,
+        steps_per_epoch=len(tr_l),
+        max_lr=max_lr,
+    )
+    scaler = torch.amp.GradScaler(
+        "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
+    )
     criterion = nn.CrossEntropyLoss()
     ep_secs = []
     for ep in range(epochs):
         model.train()
         t0 = time.perf_counter()
         loss_val = 0.0
+        step_taken = False
         for x, y in tr_l:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                 loss = criterion(model(x), y)
             scaler.scale(loss).backward()
+            scale_before = scaler.get_scale()
             scaler.step(opt)
             scaler.update()
+            step_skipped = (device.type == "cuda") and (
+                scaler.get_scale() < scale_before
+            )
+            if not step_skipped:
+                step_taken = True
+                if sched is not None and step_per_batch:
+                    sched.step()
             loss_val = loss.item()
         if device.type == "cuda":
             torch.cuda.synchronize()
         ep_secs.append(time.perf_counter() - t0)
-        sched.step()
+        if sched is not None and not step_per_batch:
+            if step_taken or getattr(opt, "_opt_called", False):
+                sched.step()
         print(
             f"  [{desc}] Epoch {ep + 1}/{epochs} - Loss: {loss_val:.4f} | Time: {ep_secs[-1]:.2f}s",
             flush=True,
@@ -752,8 +820,8 @@ def main():
             save_exp3_publication_figure(args.output_dir, {}, {})
         return
 
-    epochs_c10 = 2 if args.quick else args.epochs_c10
-    epochs_fm = 2 if args.quick else args.epochs_fm
+    epochs_c10 = 20 if args.quick else args.epochs_c10
+    epochs_fm = 20 if args.quick else args.epochs_fm
     runs = 1 if args.quick else args.runs
     batch_size = 64 if args.quick else args.batch_size
 
@@ -769,25 +837,52 @@ def main():
     )
 
     variants = [
-        ("TITAN (Full)", lambda p, lr: TITAN(p, lr=lr, weight_decay=1e-4, ns_steps=3)),
+        (
+            "TITAN (Full)",
+            lambda p, lr: TITAN(
+                p, lr=lr, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
+            ),
+        ),
         (
             "TITANAdaptive",
-            lambda p, lr: TITANAdaptive(p, lr=lr, weight_decay=1e-4, ns_steps=3),
+            lambda p, lr: TITANAdaptive(
+                p, lr=lr, weight_decay=5e-6, beta1=0.85, eps=1e-6, ns_steps=4
+            ),
         ),
         (
             "- Newton-Schulz",
-            lambda p, lr: TITANAblation(p, lr=lr, weight_decay=1e-4, use_ns=False),
+            lambda p, lr: TITANAblation(
+                p,
+                lr=lr,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
+                use_ns=False,
+            ),
         ),
         (
             "- RMS/Polar Norm",
             lambda p, lr: TITANAblation(
-                p, lr=lr, weight_decay=1e-4, use_rms_norm=False
+                p,
+                lr=lr,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
+                use_rms_norm=False,
             ),
         ),
         (
             "- Momentum",
             lambda p, lr: TITANAblation(
-                p, lr=lr, weight_decay=1e-4, use_momentum=False
+                p,
+                lr=lr,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
+                use_momentum=False,
             ),
         ),
         ("Muon Baseline", lambda p, lr: MuonBaseline(p, lr=lr, weight_decay=1e-4)),
@@ -799,14 +894,16 @@ def main():
     if os.path.exists(out_json):
         try:
             with open(out_json, encoding="utf-8") as f:
-                results = json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    results.update(loaded)
         except (json.JSONDecodeError, OSError):
-            results = {
-                "table4_fmnist": {},
-                "table4_cifar10": {},
-                "k_sweep": {},
-                "lr_sweep": {},
-            }
+            pass
+
+    results.setdefault("table4_fmnist", {})
+    results.setdefault("table4_cifar10", {})
+    results.setdefault("k_sweep", {})
+    results.setdefault("lr_sweep", {})
 
     # 1. Fashion-MNIST LeNet-5 Ablations (Table IV)
     mean_fm, std_fm = (0.2860,), (0.3530,)
@@ -844,7 +941,7 @@ def main():
             model = LeNet5(10).to(device)
             acc, sec = train_and_eval(
                 model,
-                opt_fn(model.parameters(), 1e-3),
+                opt_fn(model.parameters(), 1e-3 if "Muon" in v_name else 0.0005),
                 tr_l_fm,
                 te_l_fm,
                 epochs_fm,
@@ -900,7 +997,7 @@ def main():
         model = ResNet18CIFAR(10).to(device)
         acc, sec = train_and_eval(
             model,
-            opt_fn(model.parameters(), 1e-3),
+            opt_fn(model.parameters(), 1e-3 if "Muon" in v_name else 0.0005),
             tr_l_c10,
             te_l_c10,
             epochs_c10,
@@ -920,7 +1017,14 @@ def main():
     for k in k_list:
         torch.manual_seed(42)
         model = ResNet18CIFAR(10).to(device)
-        opt = TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4, ns_steps=k)
+        opt = TITAN(
+            model.parameters(),
+            lr=0.0005,
+            weight_decay=5e-6,
+            beta=0.85,
+            eps=1e-6,
+            ns_steps=k,
+        )
         acc, sec = train_and_eval(
             model, opt, tr_l_c10, te_l_c10, epochs_c10, device, desc=f"K={k}"
         )
@@ -930,7 +1034,7 @@ def main():
             json.dump(results, f, indent=2)
 
     # 4. LR-sweep (Fig 3b)
-    lrs = [1e-4, 1e-3] if args.quick else [1e-4, 3e-4, 1e-3, 3e-3]
+    lrs = [1e-5, 5e-5, 1e-4, 5e-4] if args.quick else [1e-5, 5e-5, 1e-4, 5e-4]
     sweep_opts = ["titan", "adamw"] if args.quick else ["titan", "muon", "adamw"]
     for opt_key in sweep_opts:
         results["lr_sweep"][opt_key] = []
@@ -938,7 +1042,14 @@ def main():
             torch.manual_seed(42)
             model = ResNet18CIFAR(10).to(device)
             if opt_key == "titan":
-                opt = TITAN(model.parameters(), lr=lr_val, weight_decay=1e-4)
+                opt = TITAN(
+                    model.parameters(),
+                    lr=lr_val,
+                    weight_decay=5e-6,
+                    beta=0.85,
+                    eps=1e-6,
+                    ns_steps=4,
+                )
             elif opt_key == "muon":
                 opt = MuonBaseline(model.parameters(), lr=lr_val, weight_decay=1e-4)
             else:

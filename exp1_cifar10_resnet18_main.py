@@ -245,7 +245,7 @@ def newton_schulz_orthogonalize(
 
 class TITAN(Optimizer):
     def __init__(
-        self, params, lr=1e-3, weight_decay=0.01, beta=0.9, eps=1e-8, ns_steps=3
+        self, params, lr=0.0005, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
@@ -309,7 +309,7 @@ class TITAN(Optimizer):
 
 
 class MuonBaseline(Optimizer):
-    def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.95, ns_steps=5):
+    def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.95, ns_steps=5):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
@@ -446,20 +446,76 @@ class StochasticDampedLBFGS(Optimizer):
         return loss
 
 
-def make_optimizer(name, params, lr=1e-3, wd=1e-4):
+def build_scheduler(
+    optimizer: Optimizer,
+    scheduler_type: str,
+    epochs: int,
+    steps_per_epoch: int,
+    max_lr: float,
+):
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs), eta_min=max_lr * 1e-2
+        )
+        return scheduler, False
+    elif scheduler_type == "onecycle":
+        total_steps = max(1, epochs * steps_per_epoch)
+        # cycle_momentum=False is required because TITAN manages its own self.beta attribute
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=0.2,
+            cycle_momentum=False,
+        )
+        return scheduler, True
+    return None, False
+
+
+def make_optimizer(name, params, lr=None, wd=None):
     k = name.lower()
     if k == "titan":
-        return TITAN(params, lr=lr, weight_decay=wd, beta=0.9, eps=1e-8, ns_steps=3)
+        return TITAN(
+            params,
+            lr=0.0005 if lr is None else lr,
+            weight_decay=5e-6 if wd is None else wd,
+            beta=0.85,
+            eps=1e-6,
+            ns_steps=4,
+        )
     if k == "muon":
-        return MuonBaseline(params, lr=lr, weight_decay=wd, beta=0.95, ns_steps=5)
+        return MuonBaseline(
+            params,
+            lr=1e-3 if lr is None else lr,
+            weight_decay=1e-4 if wd is None else wd,
+            beta=0.95,
+            ns_steps=5,
+        )
     if k == "sgd":
-        return torch.optim.SGD(params, lr=0.1, momentum=0.9, weight_decay=wd)
+        return torch.optim.SGD(
+            params,
+            lr=0.1 if lr is None else lr,
+            momentum=0.9,
+            weight_decay=1e-4 if wd is None else wd,
+        )
     if k == "adam":
-        return torch.optim.Adam(params, lr=lr, weight_decay=wd)
+        return torch.optim.Adam(
+            params,
+            lr=1e-3 if lr is None else lr,
+            weight_decay=1e-4 if wd is None else wd,
+        )
     if k == "adamw":
-        return torch.optim.AdamW(params, lr=lr, weight_decay=wd)
+        return torch.optim.AdamW(
+            params,
+            lr=1e-3 if lr is None else lr,
+            weight_decay=1e-4 if wd is None else wd,
+        )
     if k == "lbfgs":
-        return StochasticDampedLBFGS(params, lr=1e-2, weight_decay=wd)
+        return StochasticDampedLBFGS(
+            params,
+            lr=1e-2 if lr is None else lr,
+            weight_decay=1e-4 if wd is None else wd,
+        )
     raise ValueError(f"Unknown optimizer: {name}")
 
 
@@ -788,7 +844,7 @@ def main():
             save_exp1_publication_figures(args.output_dir, {}, {})
         return
 
-    epochs = 2 if args.quick else args.epochs
+    epochs = 20 if args.quick else args.epochs
     runs = 1 if args.quick else args.runs
     seeds = [42] if args.quick else [3, 42]
     batch_size = 64 if args.quick else args.batch_size
@@ -851,16 +907,28 @@ def main():
                     model = nn.DataParallel(model, device_ids=list(range(num_gpus)))
 
                 opt = make_optimizer(opt_name, model.parameters())
-                sched = torch.optim.lr_scheduler.LambdaLR(
-                    opt,
-                    lambda e: (
-                        (e + 1) / 5.0
-                        if e < 5
-                        else 0.5
-                        * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
-                    ),
+                if opt_name == "titan":
+                    sched, step_per_batch = build_scheduler(
+                        opt,
+                        scheduler_type="onecycle",
+                        epochs=epochs,
+                        steps_per_epoch=len(tr_l),
+                        max_lr=0.0005,
+                    )
+                else:
+                    sched = torch.optim.lr_scheduler.LambdaLR(
+                        opt,
+                        lambda e: (
+                            (e + 1) / 5.0
+                            if e < 5
+                            else 0.5
+                            * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                        ),
+                    )
+                    step_per_batch = False
+                scaler = torch.amp.GradScaler(
+                    "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
                 )
-                scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
                 criterion = nn.CrossEntropyLoss()
 
                 best_val, patience, c_ep = 0.0, 0, epochs
@@ -869,6 +937,7 @@ def main():
                 for ep in range(epochs):
                     model.train()
                     t0 = time.perf_counter()
+                    step_taken = False
                     for x, y in tr_l:
                         x, y = (
                             x.to(device, non_blocking=True),
@@ -880,13 +949,23 @@ def main():
                         ):
                             loss = criterion(model(x), y)
                         scaler.scale(loss).backward()
+                        scale_before = scaler.get_scale()
                         scaler.step(opt)
                         scaler.update()
+                        step_skipped = (device.type == "cuda") and (
+                            scaler.get_scale() < scale_before
+                        )
+                        if not step_skipped:
+                            step_taken = True
+                            if sched is not None and step_per_batch:
+                                sched.step()
 
                     if device.type == "cuda":
                         torch.cuda.synchronize()
                     ep_secs.append(time.perf_counter() - t0)
-                    sched.step()
+                    if sched is not None and not step_per_batch:
+                        if step_taken or getattr(opt, "_opt_called", False):
+                            sched.step()
 
                     if seed == 42 and r == 0:
                         if opt_name == "titan":
@@ -1006,7 +1085,7 @@ def main():
             ta = np.array(titan_accs[:n_pairs])
             ba = np.array(base_accs[:n_pairs])
             diffs = ta - ba
-            if np.all(diffs == diffs[0]):  # all identical → trivial
+            if np.all(diffs == diffs[0]):  # all identical -> trivial
                 stat_w, p_w = 0.0, 1.0
             else:
                 try:

@@ -156,7 +156,7 @@ def newton_schulz_orthogonalize(
 
 class TITAN(Optimizer):
     def __init__(
-        self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
+        self, params, lr=0.0005, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
@@ -230,6 +230,32 @@ class MuonBaseline(Optimizer):
                     p.mul_(1 - lr * wd)
                 p.add_(update, alpha=-lr)
         return loss
+
+
+def build_scheduler(
+    optimizer: Optimizer,
+    scheduler_type: str,
+    epochs: int,
+    steps_per_epoch: int,
+    max_lr: float,
+):
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs), eta_min=max_lr * 1e-2
+        )
+        return scheduler, False
+    elif scheduler_type == "onecycle":
+        total_steps = max(1, epochs * steps_per_epoch)
+        # cycle_momentum=False is required because TITAN manages its own self.beta attribute
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=0.2,
+            cycle_momentum=False,
+        )
+        return scheduler, True
+    return None, False
 
 
 # ====================== RESNET-50 ARCHITECTURE ==============================
@@ -622,8 +648,10 @@ def main():
             save_exp4_publication_figure(args.output_dir, {}, exp5_res, r18_acc)
         return
 
-    epochs = 2 if args.quick else args.epochs
-    opts = ["titan", "adamw"] if args.quick else ["titan", "muon", "adamw", "sgd"]
+    epochs = 20 if args.quick else args.epochs
+    opts = (
+        ["titan", "muon", "adamw"] if args.quick else ["titan", "muon", "adamw", "sgd"]
+    )
     batch_size = 64 if args.quick else args.batch_size
 
     device = get_safe_device()
@@ -690,25 +718,60 @@ def main():
             model = nn.DataParallel(model, device_ids=list(range(num_gpus)))
 
         if opt_name == "titan":
-            opt = TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            opt = TITAN(
+                model.parameters(),
+                lr=0.0005,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
+            )
+            sched, step_per_batch = build_scheduler(
+                opt,
+                scheduler_type="onecycle",
+                epochs=epochs,
+                steps_per_epoch=len(tr_l),
+                max_lr=0.0005,
+            )
         elif opt_name == "muon":
             opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched = torch.optim.lr_scheduler.LambdaLR(
+                opt,
+                lambda e: (
+                    (e + 1) / 5.0
+                    if e < 5
+                    else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                ),
+            )
+            step_per_batch = False
         elif opt_name == "adamw":
             opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched = torch.optim.lr_scheduler.LambdaLR(
+                opt,
+                lambda e: (
+                    (e + 1) / 5.0
+                    if e < 5
+                    else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                ),
+            )
+            step_per_batch = False
         else:
             opt = torch.optim.SGD(
                 model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4
             )
+            sched = torch.optim.lr_scheduler.LambdaLR(
+                opt,
+                lambda e: (
+                    (e + 1) / 5.0
+                    if e < 5
+                    else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                ),
+            )
+            step_per_batch = False
 
-        sched = torch.optim.lr_scheduler.LambdaLR(
-            opt,
-            lambda e: (
-                (e + 1) / 5.0
-                if e < 5
-                else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
-            ),
+        scaler = torch.amp.GradScaler(
+            "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
         )
-        scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
         criterion = nn.CrossEntropyLoss()
 
         best_val, patience, conv_ep = 0.0, 0, epochs
@@ -717,15 +780,26 @@ def main():
         for ep in range(1, epochs + 1):
             model.train()
             t0 = time.perf_counter()
+            step_taken = False
             for x, y in tr_l:
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                     loss = criterion(model(x), y)
                 scaler.scale(loss).backward()
+                scale_before = scaler.get_scale()
                 scaler.step(opt)
                 scaler.update()
-            sched.step()
+                step_skipped = (device.type == "cuda") and (
+                    scaler.get_scale() < scale_before
+                )
+                if not step_skipped:
+                    step_taken = True
+                    if sched is not None and step_per_batch:
+                        sched.step()
+            if sched is not None and not step_per_batch:
+                if step_taken or getattr(opt, "_opt_called", False):
+                    sched.step()
             ep_time = time.perf_counter() - t0
 
             model.eval()

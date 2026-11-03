@@ -184,7 +184,7 @@ def newton_schulz_orthogonalize(
 
 class TITAN(Optimizer):
     def __init__(
-        self, params, lr=1e-3, weight_decay=1e-4, beta=0.9, eps=1e-8, ns_steps=3
+        self, params, lr=0.0005, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
@@ -258,6 +258,32 @@ class MuonBaseline(Optimizer):
                     p.mul_(1 - lr * wd)
                 p.add_(update, alpha=-lr)
         return loss
+
+
+def build_scheduler(
+    optimizer: Optimizer,
+    scheduler_type: str,
+    epochs: int,
+    steps_per_epoch: int,
+    max_lr: float,
+):
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs), eta_min=max_lr * 1e-2
+        )
+        return scheduler, False
+    elif scheduler_type == "onecycle":
+        total_steps = max(1, epochs * steps_per_epoch)
+        # cycle_momentum=False is required because TITAN manages its own self.beta attribute
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=0.2,
+            cycle_momentum=False,
+        )
+        return scheduler, True
+    return None, False
 
 
 # ====================== BACKBONE ARCHITECTURES ==============================
@@ -540,7 +566,7 @@ def save_exp5_ppl_figure(output_dir: str, ppl_curves: dict):
     fig.savefig(fig_png, dpi=600)
     fig.savefig(fig_pdf)
     plt.close(fig)
-    print(f"[Exp 5] Fig 5 saved → {fig_png}", flush=True)
+    print(f"[Exp 5] Fig 5 saved -> {fig_png}", flush=True)
 
 
 # ====================== MAIN EXECUTION ======================================
@@ -608,9 +634,9 @@ def main():
             save_exp5_publication_figure(args.output_dir, {}, r18_acc, r50_acc)
         return
 
-    ep_wrn = 2 if args.quick else args.epochs_wrn
-    ep_vit = 2 if args.quick else args.epochs_vit
-    ep_lm = 2 if args.quick else args.epochs_lm
+    ep_wrn = 20 if args.quick else args.epochs_wrn
+    ep_vit = 20 if args.quick else args.epochs_vit
+    ep_lm = 20 if args.quick else args.epochs_lm
     opts = ["titan", "adamw"] if args.quick else ["titan", "muon", "adamw"]
     batch_size = 64 if args.quick else args.batch_size
 
@@ -634,14 +660,16 @@ def main():
     if os.path.exists(out_json):
         try:
             with open(out_json, encoding="utf-8") as f:
-                results = json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    results.update(loaded)
         except (json.JSONDecodeError, OSError):
-            results = {
-                "wrn28_10_fmnist": {},
-                "vit_b16_cifar10": {},
-                "wikitext2_perplexity": {},
-                "wikitext2_ppl_curves": {},
-            }
+            pass
+
+    results.setdefault("wrn28_10_fmnist", {})
+    results.setdefault("vit_b16_cifar10", {})
+    results.setdefault("wikitext2_perplexity", {})
+    results.setdefault("wikitext2_ppl_curves", {})
 
     # 1. WRN-28-10 on Fashion-MNIST
     mean_fm, std_fm = (0.2860,), (0.3530,)
@@ -677,31 +705,60 @@ def main():
         model = WRN28_10(10, 1, widen_factor=w_factor).to(device)
         if num_gpus > 1:
             model = nn.DataParallel(model, device_ids=list(range(num_gpus)))
-        opt = (
-            TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            if opt_name == "titan"
-            else (
-                MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
-                if opt_name == "muon"
-                else torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+        if opt_name == "titan":
+            opt = TITAN(
+                model.parameters(),
+                lr=0.0005,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
             )
+            sched, step_per_batch = build_scheduler(
+                opt,
+                scheduler_type="onecycle",
+                epochs=ep_wrn,
+                steps_per_epoch=len(tr_l_fm),
+                max_lr=0.0005,
+            )
+        elif opt_name == "muon":
+            opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = build_scheduler(
+                opt, "cosine", ep_wrn, len(tr_l_fm), 1e-3
+            )
+        else:
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = build_scheduler(
+                opt, "cosine", ep_wrn, len(tr_l_fm), 1e-3
+            )
+        scaler = torch.amp.GradScaler(
+            "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
         )
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=ep_wrn)
-        scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
         criterion = nn.CrossEntropyLoss()
 
         for ep in range(ep_wrn):
             model.train()
             t0 = time.perf_counter()
+            step_taken = False
             for x, y in tr_l_fm:
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                     loss = criterion(model(x), y)
                 scaler.scale(loss).backward()
+                scale_before = scaler.get_scale()
                 scaler.step(opt)
                 scaler.update()
-            sched.step()
+                step_skipped = (device.type == "cuda") and (
+                    scaler.get_scale() < scale_before
+                )
+                if not step_skipped:
+                    step_taken = True
+                    if sched is not None and step_per_batch:
+                        sched.step()
+            if sched is not None and not step_per_batch:
+                if step_taken or getattr(opt, "_opt_called", False):
+                    sched.step()
             print(
                 f"  [WRN-28-10 | {opt_name.upper()}] Epoch {ep + 1}/{ep_wrn} - Loss: {loss.item():.4f} | Time: {time.perf_counter() - t0:.2f}s",
                 flush=True,
@@ -715,7 +772,7 @@ def main():
                 c += model(x).argmax(1).eq(y).sum().item()
                 tot += y.size(0)
         acc = 100.0 * c / max(1, tot)
-        results["wrn28_10_fmnist"][opt_name] = float(acc)
+        results.setdefault("wrn28_10_fmnist", {})[opt_name] = float(acc)
         print(f"[WRN-28-10 FMNIST | {opt_name.upper()}] Acc={acc:.2f}%", flush=True)
         with open(out_json, "w") as f:
             json.dump(results, f, indent=2)
@@ -755,31 +812,60 @@ def main():
         model = ViTCIFAR(32, 4, 10, dim=256, depth=v_depth, heads=8).to(device)
         if num_gpus > 1:
             model = nn.DataParallel(model, device_ids=list(range(num_gpus)))
-        opt = (
-            TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            if opt_name == "titan"
-            else (
-                MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
-                if opt_name == "muon"
-                else torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+        if opt_name == "titan":
+            opt = TITAN(
+                model.parameters(),
+                lr=0.0005,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
             )
+            sched, step_per_batch = build_scheduler(
+                opt,
+                scheduler_type="onecycle",
+                epochs=ep_vit,
+                steps_per_epoch=len(tr_l_c10),
+                max_lr=0.0005,
+            )
+        elif opt_name == "muon":
+            opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = build_scheduler(
+                opt, "cosine", ep_vit, len(tr_l_c10), 1e-3
+            )
+        else:
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = build_scheduler(
+                opt, "cosine", ep_vit, len(tr_l_c10), 1e-3
+            )
+        scaler = torch.amp.GradScaler(
+            "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
         )
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=ep_vit)
-        scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
         criterion = nn.CrossEntropyLoss()
 
         for ep in range(ep_vit):
             model.train()
             t0 = time.perf_counter()
+            step_taken = False
             for x, y in tr_l_c10:
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                     loss = criterion(model(x), y)
                 scaler.scale(loss).backward()
+                scale_before = scaler.get_scale()
                 scaler.step(opt)
                 scaler.update()
-            sched.step()
+                step_skipped = (device.type == "cuda") and (
+                    scaler.get_scale() < scale_before
+                )
+                if not step_skipped:
+                    step_taken = True
+                    if sched is not None and step_per_batch:
+                        sched.step()
+            if sched is not None and not step_per_batch:
+                if step_taken or getattr(opt, "_opt_called", False):
+                    sched.step()
             print(
                 f"  [ViT-B/16 | {opt_name.upper()}] Epoch {ep + 1}/{ep_vit} - Loss: {loss.item():.4f} | Time: {time.perf_counter() - t0:.2f}s",
                 flush=True,
@@ -793,7 +879,7 @@ def main():
                 c += model(x).argmax(1).eq(y).sum().item()
                 tot += y.size(0)
         acc = 100.0 * c / max(1, tot)
-        results["vit_b16_cifar10"][opt_name] = float(acc)
+        results.setdefault("vit_b16_cifar10", {})[opt_name] = float(acc)
         print(f"[ViT-B/16 CIFAR-10 | {opt_name.upper()}] Acc={acc:.2f}%", flush=True)
         with open(out_json, "w") as f:
             json.dump(results, f, indent=2)
@@ -814,16 +900,31 @@ def main():
         model = TransformerLM(
             vocab_size=vocab_size, dim=128, depth=lm_depth, heads=4, max_seq_len=seq_len
         ).to(device)
-        opt = (
-            TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            if opt_name == "titan"
-            else (
-                MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
-                if opt_name == "muon"
-                else torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+        if opt_name == "titan":
+            opt = TITAN(
+                model.parameters(),
+                lr=0.0005,
+                weight_decay=5e-6,
+                beta=0.85,
+                eps=1e-6,
+                ns_steps=4,
             )
+            sched, step_per_batch = build_scheduler(
+                opt,
+                scheduler_type="onecycle",
+                epochs=ep_lm,
+                steps_per_epoch=len(lm_tr),
+                max_lr=0.0005,
+            )
+        elif opt_name == "muon":
+            opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = None, False
+        else:
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+            sched, step_per_batch = None, False
+        scaler = torch.amp.GradScaler(
+            "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
         )
-        scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
         criterion = nn.CrossEntropyLoss()
 
         # Per-epoch perplexity curve (tracked from epoch-averaged training loss)
@@ -833,6 +934,7 @@ def main():
             model.train()
             t0 = time.perf_counter()
             ep_loss_sum, ep_n_batches = 0.0, 0
+            step_taken = False
             for x, y in lm_tr:
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
@@ -840,11 +942,22 @@ def main():
                     logits = model(x)
                     loss = criterion(logits.reshape(-1, vocab_size), y.reshape(-1))
                 scaler.scale(loss).backward()
+                scale_before = scaler.get_scale()
                 scaler.step(opt)
                 scaler.update()
+                step_skipped = (device.type == "cuda") and (
+                    scaler.get_scale() < scale_before
+                )
+                if not step_skipped:
+                    step_taken = True
+                    if sched is not None and step_per_batch:
+                        sched.step()
                 ep_loss_sum += loss.item()
                 ep_n_batches += 1
             val_loss = ep_loss_sum / max(1, ep_n_batches)
+            if sched is not None and not step_per_batch:
+                if step_taken or getattr(opt, "_opt_called", False):
+                    sched.step()
             ep_ppl = float(math.exp(min(val_loss, 20.0)))
             ppl_curve.append(ep_ppl)
             print(
@@ -855,8 +968,8 @@ def main():
             )
 
         final_ppl = ppl_curve[-1] if ppl_curve else float(math.exp(min(val_loss, 20.0)))
-        results["wikitext2_perplexity"][opt_name] = final_ppl
-        results["wikitext2_ppl_curves"][opt_name] = ppl_curve
+        results.setdefault("wikitext2_perplexity", {})[opt_name] = final_ppl
+        results.setdefault("wikitext2_ppl_curves", {})[opt_name] = ppl_curve
         print(
             f"[Transformer LM WikiText-2 | {opt_name.upper()}] Final Perplexity={final_ppl:.2f}",
             flush=True,

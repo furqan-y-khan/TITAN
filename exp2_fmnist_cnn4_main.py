@@ -216,7 +216,7 @@ def newton_schulz_orthogonalize(
 
 class TITAN(Optimizer):
     def __init__(
-        self, params, lr=1e-3, weight_decay=0.01, beta=0.9, eps=1e-8, ns_steps=3
+        self, params, lr=0.0005, weight_decay=5e-6, beta=0.85, eps=1e-6, ns_steps=4
     ):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
@@ -256,7 +256,7 @@ class TITAN(Optimizer):
 
 
 class MuonBaseline(Optimizer):
-    def __init__(self, params, lr=1e-3, weight_decay=0.01, beta=0.95, ns_steps=5):
+    def __init__(self, params, lr=1e-3, weight_decay=1e-4, beta=0.95, ns_steps=5):
         super().__init__(params, {"lr": lr, "weight_decay": weight_decay})
         self.beta = beta
         self.ns_steps = ns_steps
@@ -378,6 +378,32 @@ class StochasticDampedLBFGS(Optimizer):
                 )
                 offset += n
         return loss
+
+
+def build_scheduler(
+    optimizer: Optimizer,
+    scheduler_type: str,
+    epochs: int,
+    steps_per_epoch: int,
+    max_lr: float,
+):
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs), eta_min=max_lr * 1e-2
+        )
+        return scheduler, False
+    elif scheduler_type == "onecycle":
+        total_steps = max(1, epochs * steps_per_epoch)
+        # cycle_momentum=False is required because TITAN manages its own self.beta attribute
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=0.2,
+            cycle_momentum=False,
+        )
+        return scheduler, True
+    return None, False
 
 
 # ====================== CNN-4 ARCHITECTURE ==================================
@@ -614,7 +640,7 @@ def main():
             save_exp2_publication_figure(args.output_dir, {}, c10_curves)
         return
 
-    epochs = 2 if args.quick else args.epochs
+    epochs = 20 if args.quick else args.epochs
     runs = 1 if args.quick else args.runs
     batch_size = 64 if args.quick else args.batch_size
     optimizers = (
@@ -638,9 +664,14 @@ def main():
     if os.path.exists(out_json):
         try:
             with open(out_json, encoding="utf-8") as f:
-                results = json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    results.update(loaded)
         except (json.JSONDecodeError, OSError):
-            results = {"table2": {}, "loss_curves": {}}
+            pass
+
+    results.setdefault("table2", {})
+    results.setdefault("loss_curves", {})
 
     for opt_name in optimizers:
         accs, times, mems = [], [], []
@@ -663,31 +694,48 @@ def main():
                 model = nn.DataParallel(model, device_ids=list(range(num_gpus)))
 
             if opt_name == "titan":
-                opt = TITAN(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            elif opt_name == "muon":
-                opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            elif opt_name == "sgd":
-                opt = torch.optim.SGD(
-                    model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-4
+                opt = TITAN(
+                    model.parameters(),
+                    lr=0.0005,
+                    weight_decay=5e-6,
+                    beta=0.85,
+                    eps=1e-6,
+                    ns_steps=4,
                 )
-            elif opt_name == "adam":
-                opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-            elif opt_name == "adamw":
-                opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                sched, step_per_batch = build_scheduler(
+                    opt,
+                    scheduler_type="onecycle",
+                    epochs=epochs,
+                    steps_per_epoch=len(tr_l),
+                    max_lr=0.0005,
+                )
             else:
-                opt = StochasticDampedLBFGS(
-                    model.parameters(), lr=1e-2, weight_decay=1e-4
+                if opt_name == "muon":
+                    opt = MuonBaseline(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                elif opt_name == "sgd":
+                    opt = torch.optim.SGD(
+                        model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-4
+                    )
+                elif opt_name == "adam":
+                    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                elif opt_name == "adamw":
+                    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                else:
+                    opt = StochasticDampedLBFGS(
+                        model.parameters(), lr=1e-2, weight_decay=1e-4
+                    )
+                sched = torch.optim.lr_scheduler.LambdaLR(
+                    opt,
+                    lambda e: (
+                        (e + 1) / 5.0
+                        if e < 5
+                        else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                    ),
                 )
-
-            sched = torch.optim.lr_scheduler.LambdaLR(
-                opt,
-                lambda e: (
-                    (e + 1) / 5.0
-                    if e < 5
-                    else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
-                ),
+                step_per_batch = False
+            scaler = torch.amp.GradScaler(
+                "cuda", init_scale=16384.0, enabled=(device.type == "cuda")
             )
-            scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
             criterion = nn.CrossEntropyLoss()
 
             best_val, patience = 0.0, 0
@@ -697,6 +745,7 @@ def main():
                 model.train()
                 t0 = time.perf_counter()
                 loss_sum, n_tot = 0.0, 0
+                step_taken = False
                 for x, y in tr_l:
                     x, y = (
                         x.to(device, non_blocking=True),
@@ -706,8 +755,16 @@ def main():
                     with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                         loss = criterion(model(x), y)
                     scaler.scale(loss).backward()
+                    scale_before = scaler.get_scale()
                     scaler.step(opt)
                     scaler.update()
+                    step_skipped = (device.type == "cuda") and (
+                        scaler.get_scale() < scale_before
+                    )
+                    if not step_skipped:
+                        step_taken = True
+                        if sched is not None and step_per_batch:
+                            sched.step()
                     loss_sum += loss.item() * x.size(0)
                     n_tot += x.size(0)
 
@@ -716,7 +773,9 @@ def main():
                 ep_secs.append(time.perf_counter() - t0)
                 mean_loss = float(loss_sum / max(1, n_tot))
                 tr_losses.append(mean_loss)
-                sched.step()
+                if sched is not None and not step_per_batch:
+                    if step_taken or getattr(opt, "_opt_called", False):
+                        sched.step()
 
                 model.eval()
                 c_val, t_val = 0, 0
