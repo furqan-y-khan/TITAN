@@ -998,7 +998,7 @@ def main():
                         best_val, patience = val_acc, 0
                     else:
                         patience += 1
-                        if patience >= 20 and not args.quick:
+                        if patience >= 200 and not args.quick:
                             c_ep = ep + 1
                             break
 

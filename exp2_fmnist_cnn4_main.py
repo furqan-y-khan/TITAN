@@ -717,9 +717,13 @@ def main():
                         model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-4
                     )
                 elif opt_name == "adam":
-                    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                    opt = torch.optim.Adam(
+                        model.parameters(), lr=1e-3, weight_decay=1e-4
+                    )
                 elif opt_name == "adamw":
-                    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+                    opt = torch.optim.AdamW(
+                        model.parameters(), lr=1e-3, weight_decay=1e-4
+                    )
                 else:
                     opt = StochasticDampedLBFGS(
                         model.parameters(), lr=1e-2, weight_decay=1e-4
@@ -729,7 +733,8 @@ def main():
                     lambda e: (
                         (e + 1) / 5.0
                         if e < 5
-                        else 0.5 * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
+                        else 0.5
+                        * (1.0 + math.cos(math.pi * (e - 5) / max(1, epochs - 5)))
                     ),
                 )
                 step_per_batch = False
@@ -797,7 +802,7 @@ def main():
                     best_val, patience = val_acc, 0
                 else:
                     patience += 1
-                    if patience >= 20 and not args.quick:
+                    if patience >= 200 and not args.quick:
                         break
 
             model.eval()
