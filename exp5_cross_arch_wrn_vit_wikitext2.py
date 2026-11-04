@@ -716,7 +716,7 @@ def main():
             )
             sched, step_per_batch = build_scheduler(
                 opt,
-                scheduler_type="onecycle",
+                scheduler_type="cosine",
                 epochs=ep_wrn,
                 steps_per_epoch=len(tr_l_fm),
                 max_lr=0.0005,
@@ -823,7 +823,7 @@ def main():
             )
             sched, step_per_batch = build_scheduler(
                 opt,
-                scheduler_type="onecycle",
+                scheduler_type="cosine",
                 epochs=ep_vit,
                 steps_per_epoch=len(tr_l_c10),
                 max_lr=0.0005,
@@ -911,7 +911,7 @@ def main():
             )
             sched, step_per_batch = build_scheduler(
                 opt,
-                scheduler_type="onecycle",
+                scheduler_type="cosine",
                 epochs=ep_lm,
                 steps_per_epoch=len(lm_tr),
                 max_lr=0.0005,

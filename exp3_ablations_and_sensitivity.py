@@ -732,7 +732,7 @@ def save_exp3_publication_figure(output_dir: str, k_sweep: dict, lr_sweep: dict)
 # ====================== TRAIN / EVAL HELPER =================================
 def train_and_eval(model, opt, tr_l, te_l, epochs, device, desc=""):
     is_titan = isinstance(opt, (TITAN, TITANAdaptive, TITANAblation))
-    sched_type = "onecycle" if is_titan else "cosine"
+    sched_type = "cosine" if is_titan else "cosine"
     max_lr = opt.param_groups[0].get("lr", 0.0005)
     sched, step_per_batch = build_scheduler(
         opt,
