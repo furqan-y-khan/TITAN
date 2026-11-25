@@ -20,84 +20,107 @@ Official empirical benchmark suite and reproducibility codebase for the research
 
 First-order stochastic optimizers (e.g., SGD, AdamW) and exact second-order curvature methods face a fundamental trade-off between per-iteration efficiency and convergence speed in high-dimensional deep neural networks. While coordinate-wise diagonal preconditioners scale linearly as $\mathcal{O}(d)$, they neglect cross-parameter spectral structure, leading to slow progress in ill-conditioned loss landscapes. Conversely, Kronecker-factored (K-FAC) and quasi-Newton (L-BFGS) methods incur heavy memory overhead and costly matrix inversion.
 
-**TITAN** (**T**uned **I**terative **T**raining via **A**pproximate **N**ewton–Schulz) is a matrix-free stochastic optimization algorithm that bridges first-order momentum efficiency with the spectral conditioning advantages of second-order preconditioning. By projecting the reshaped momentum buffer of each 2D parameter tensor onto the nearest semi-orthogonal matrix (polar factor) using an adaptively truncated quintic Newton–Schulz recurrence coupled with Frobenius pre-scaling and unit root-mean-square (RMS) post-normalization, TITAN equalizes directional curvature scales at strictly $\mathcal{O}(d)$ memory cost.
+**TITAN** (**T**uned **I**terative **T**raining via **A**pproximate **N**ewton–Schulz) is a hybrid matrix-free stochastic optimization algorithm implemented in [`titan_optimizer.py`](titan_optimizer.py) that bridges first-order momentum efficiency with the spectral conditioning advantages of second-order preconditioning. For **2D parameter tensors** (`p.ndim == 2`), TITAN applies exponential momentum followed by truncated quintic Newton–Schulz orthogonalization with Frobenius pre-normalization and optional aspect-ratio scaling (`matrix_scale=True`). For **all other parameter shapes** (e.g., 1D biases, normalization scales, and 3D/4D convolutional kernels) or when `matrix_mode=False`, TITAN applies a bias-corrected Adam-style update. All optimizer states (`m` and `v`) are maintained in FP32 with decoupled weight decay and optional global gradient norm clipping.
 
 ### 🌟 Key Empirical Highlights
 * **Superior Accuracy:** Reaches **94.91%** top-1 test accuracy on ResNet-18 (CIFAR-10) and **96.10%** on ResNet-50 (CIFAR-10), surpassing AdamW by **+1.60%** and Muon by **+0.80%**. Attains **93.74%** on Fashion-MNIST (+1.63% over AdamW).
 * **37% Wall-Clock Speedup:** Slashes per-epoch training latency by **37.0%** relative to exact orthogonalization / Muon baselines (44.9 s vs. 71.3 s per epoch on CIFAR-10) and converges in **22.0% fewer epochs**.
-* **Strict $\mathcal{O}(d)$ Memory:** Stores only a single momentum buffer per parameter (identical to SGD with momentum), cutting optimizer state VRAM by **50% compared to AdamW** (which tracks both $m_t$ and $v_t$) and avoiding the $\mathcal{O}(r^2 + c^2)$ Kronecker covariance buffers of K-FAC/Shampoo. Peak GPU VRAM remains within **3.9% of AdamW**.
+* **$\mathcal{O}(d)$ Optimizer State Memory:** Maintains FP32 first and second moment buffers (`m` and `v`) per parameter, avoiding the $\mathcal{O}(r^2 + c^2)$ Kronecker covariance buffers of K-FAC/Shampoo as well as matrix inversions and SVDs. Peak GPU VRAM remains within **3.9% of AdamW**.
 * **Broad Architecture Generalization:** Demonstrates strict Pareto gains across ResNet-18, ResNet-50, Wide ResNet-28-10 (WRN-28-10), Vision Transformer (ViT-B/16), and language modeling with a 12-layer Transformer on WikiText-2 (reducing validation perplexity from 38.4 to **31.9**).
 * **Theoretical Non-Convex Guarantees:** Establishes an ergodic stationarity rate of $\mathcal{O}(1/\sqrt{T})$ with explicit characterization of the finite-step polynomial truncation error $\delta_K^2$, alongside local linear-quadratic contraction near strict local minima.
 
 ---
 
-## 🧠 Methodology & Algorithm Architecture
+## 🧠 Methodology & Algorithm Architecture (`titan_optimizer.py`)
 
 ```
                   ┌──────────────────────────────────────────────┐
-                  │          Dense Stochastic Gradient g_t       │
+                  │   Dense Stochastic Gradient g_t (FP32 cast)  │
+                  │   • Rejects sparse gradients (RuntimeError)  │
+                  │   • Skips non-finite gradients               │
+                  │   • Optional global clip (max_grad_norm)     │
                   └──────────────────────┬───────────────────────┘
                                          ▼
                   ┌──────────────────────────────────────────────┐
-                  │    EMA Momentum Buffer: m_t = β m_{t-1} +    │
-                  │                 (1 - β) g_t                  │
+                  │  FP32 Moment Buffers (preserve_format):      │
+                  │    m_t = β₁ m_{t-1} + (1 - β₁) g_t           │
+                  │    v_t = β₂ v_{t-1} + (1 - β₂) g_t²          │
                   └──────────────────────┬───────────────────────┘
                                          │
                  ┌───────────────────────┴───────────────────────┐
-                 │ 1D Params (ndim < 2)          2D+ Weight Tensors
-                 ▼ (Biases, Scales)                              ▼
-          ┌─────────────┐                        ┌───────────────────────────────┐
-          │  U_t = m_t  │                        │ Reshape M_t ∈ R^{r x c} (r ≤ c)│
-          └──────┬──────┘                        │ Upcast to FP32: M̃_t            │
-                 │                               └───────────────┬───────────────┘
-                 │                                               ▼
-                 │                               ┌───────────────────────────────┐
-                 │                               │ Frobenius Pre-Scaling:        │
-                 │                               │ X_0 = M̃_t / (||M̃_t||_F + ε_0) │
-                 │                               └───────────────┬───────────────┘
-                 │                                               ▼
-                 │                               ┌───────────────────────────────┐
-                 │                               │ Quintic Newton-Schulz Loop:   │
-                 │                               │ For k = 0 to K-1 (default K=3)│
-                 │                               │   A_k = X_k X_k^T             │
-                 │                               │   B_k = A_k X_k               │
-                 │                               │   X_{k+1} = a X_k + b B_k +   │
-                 │                               │             c (A_k B_k)       │
-                 │                               └───────────────┬───────────────┘
-                 │                                               ▼
-                 │                               ┌───────────────────────────────┐
-                 │                               │ Unit-RMS Post-Normalization:  │
-                 │                               │ U_t = O_t / (RMS(O_t) + ε)    │
-                 │                               └───────────────┬───────────────┘
-                 │                                               │
-                 └───────────────────────┬───────────────────────┘
-                                         ▼
+                 │ p.ndim != 2 or not matrix_mode                │ p.ndim == 2 and matrix_mode
+                 ▼ (1D Biases/Scales, 3D/4D Convs)               ▼ (2D Weight Matrices)
+          ┌─────────────────────────────┐         ┌───────────────────────────────┐
+          │ Bias-Corrected Adam Update: │         │ Transpose if rows > cols      │
+          │  m̂_t = m_t / (1 - β₁^t)     │         │ Frobenius Pre-Normalization:  │
+          │  v̂_t = v_t / (1 - β₂^t)     │         │  X_0 = X / max(||X||_F, ε)    │
+          │  U_t = m̂_t / (√v̂_t + ε)     │         └───────────────┬───────────────┘
+          └──────────────┬──────────────┘                         ▼
+                         │                        ┌───────────────────────────────┐
+                         │                        │ Quintic Newton-Schulz Loop:   │
+                         │                        │ For k = 0 to ns_steps-1 (5):  │
+                         │                        │   G_k = X_k X_k^T             │
+                         │                        │   P_k = G_k X_k               │
+                         │                        │   X_{k+1} = a X_k + b P_k +   │
+                         │                        │             c (G_k P_k)       │
+                         │                        └───────────────┬───────────────┘
+                         │                                        ▼
+                         │                        ┌───────────────────────────────┐
+                         │                        │ Optional Aspect-Ratio Scale:  │
+                         │                        │  If matrix_scale=True:        │
+                         │                        │   scale = √max(1, rows/cols)  │
+                         │                        │   U_t = scale · O_t           │
+                         │                        └───────────────┬───────────────┘
+                         │                                        │
+                         └───────────────────────┬────────────────┘
+                                                 ▼
                   ┌──────────────────────────────────────────────┐
-                  │   Decoupled Weight Decay & Preconditioned    │
-                  │   Update:                                    │
-                  │     θ_{t+1} = (1 - η_t λ) θ_t - η_t U_t      │
+                  │   Decoupled Weight Decay & Parameter Step:   │
+                  │     θ ← (1 - η · wd) θ   (if wd != 0)        │
+                  │     θ ← θ - η · cast(U_t, θ.dtype)           │
                   └──────────────────────────────────────────────┘
 ```
 
-### Algorithm 1: TITAN Optimizer via Quintic Newton–Schulz
-* **Input:** Initial parameters $\theta_0$, learning rate $\eta_t$ (default $10^{-3}$ or $5\times 10^{-4}$), decoupled weight decay $\lambda$ (default $0.01$ or $5\times 10^{-6}$), momentum $\beta = 0.90$ (tuned: $0.85$), iteration depth $K = 3$ (tuned: $4$), minimax coefficients $(a, b, c) = (3.4445, -4.7750, 2.0315)$, stability constants $\varepsilon_0 = 10^{-7}, \varepsilon = 10^{-6} \text{ or } 10^{-8}$.
-1. **Exponential Moving Average Momentum:**
-   $$m_t = \beta m_{t-1} + (1 - \beta) g_t, \quad m_0 = 0$$
-2. **Dimension Minimization & FP32 Upcasting:**
-   For any tensor with $\text{ndim}(p) \ge 2$, reshape to 2D matrix $M_t \in \mathbb{R}^{r \times c}$. If $r > c$, transpose so that working dimension $r \le c$, minimizing the size of the $r \times r$ Gram matrix:
-   $$\tilde{M}_t = \text{float32}(M_t)^T \text{ if } r > c \text{ else } \text{float32}(M_t) \in \mathbb{R}^{r \times c}$$
-3. **Frobenius Pre-Normalization:**
-   $$X_0 = \frac{\tilde{M}_t}{\|\tilde{M}_t\|_F + \varepsilon_0}, \quad \text{guaranteeing } \sigma_i(X_0) \in (0, 1]$$
-4. **Truncated Quintic Newton–Schulz Recurrence ($k = 0, \dots, K-1$):**
-   $$A_k = X_k X_k^T \in \mathbb{R}^{r \times r}, \quad B_k = A_k X_k \in \mathbb{R}^{r \times c}$$
-   $$X_{k+1} = a X_k + b B_k + c (A_k B_k)$$
-   The minimax coefficients $(a,b,c) = (3.4445, -4.7750, 2.0315)$ maximize the origin derivative $\phi'(0) = 3.4445$ (vs. $1.5$ for cubic iterations), rapidly contracting singular values into the band $[0.75, 1.25]$ within $K=3$ iterations.
-5. **Unit-RMS Post-Normalization:**
-   Transpose $X_K$ back if $r > c$, cast to parameter native dtype, and normalize by entrywise root-mean-square:
-   $$U_t = \frac{O_t}{\text{RMS}(O_t) + \varepsilon}, \quad \text{RMS}(O_t) = \sqrt{\frac{1}{n}\sum_{i,j} \text{float32}(O_{t,ij})^2}, \quad n = \text{numel}(O_t)$$
-   *(For 1D parameters such as biases and normalization scales, $U_t = m_t$ directly).*
-6. **Decoupled Step:**
-   $$\theta_{t+1} = (1 - \eta_t \lambda) \theta_t - \eta_t U_t$$
+### Algorithm 1: Hybrid TITAN Optimizer (`TITAN` in `titan_optimizer.py`)
+* **Constructor Defaults:** `lr=1e-3`, `weight_decay=0.01`, `betas=(0.9, 0.999)`, `eps=1e-8`, `ns_steps=5`, `matrix_mode=True`, `matrix_scale=True`, `max_grad_norm=None`, minimax coefficients $(a, b, c) = (3.4445, -4.7750, 2.0315)$.
+1. **Gradient Validation & Optional Global Clipping:**
+   If `max_grad_norm` is specified, clip dense gradients globally via `torch.nn.utils.clip_grad_norm_`. Sparse gradients raise a `RuntimeError` (`sparse=False` is required for embedding layers), and parameters with non-finite gradients (`NaN`/`Inf`) are skipped.
+2. **FP32 Moment Updates:**
+   Upcast $g_t$ to `torch.float32` and update both FP32 state buffers (`memory_format=torch.preserve_format`):
+   $$m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t, \quad v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2$$
+3. **2D Matrix Branch (`matrix_mode=True` and `p.ndim == 2`) via `newton_schulz_orthogonalize`:**
+   - Upcast $m_t$ to `float32`. If $\text{rows} > \text{cols}$, transpose $X$ so that working dimension $r \le c$, minimizing the size of the $r \times r$ Gram matrix.
+   - Compute Frobenius norm $\|X\|_F = \text{linalg.vector\_norm}(X)$; if non-finite or $\le \varepsilon$, return zeros. Otherwise normalize:
+     $$X_0 = \frac{X}{\max(\|X\|_F, \varepsilon)}$$
+   - Run `ns_steps` quintic Newton–Schulz iterations ($k = 0, \dots, \text{ns\_steps}-1$):
+     $$G_k = X_k X_k^T \in \mathbb{R}^{r \times r}, \quad P_k = G_k X_k \in \mathbb{R}^{r \times c}$$
+     $$X_{k+1} = a X_k + b P_k + c (G_k P_k)$$
+     with $(a, b, c) = (3.4445, -4.7750, 2.0315)$.
+   - Transpose back if transposed, cast back to the input dtype and convert to FP32. If `matrix_scale=True`, scale the update by the aspect-ratio factor:
+     $$U_t = \sqrt{\max\!\left(1.0, \frac{\text{rows}}{\max(1, \text{cols})}\right)} \cdot O_t$$
+4. **Non-2D / Fallback Branch (`p.ndim != 2` or `matrix_mode=False`):**
+   Compute the bias-corrected Adam-style update:
+   $$\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t}, \quad U_t = \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \varepsilon}$$
+5. **Decoupled Weight Decay & Step:**
+   If $\lambda = \text{weight\_decay} \neq 0$, apply decoupled decay $\theta \leftarrow (1 - \eta \lambda)\theta$, then update $\theta \leftarrow \theta - \eta \cdot U_t.\text{to}(\theta.\text{dtype})$.
+
+### Usage Example (`titan_optimizer.py`)
+`TITAN` implements the standard `torch.optim.Optimizer` interface and supports closures, AMP `GradScaler`, and PyTorch LR schedulers:
+```python
+from titan_optimizer import TITAN
+
+optimizer = TITAN(
+    model.parameters(),
+    lr=1e-3,
+    weight_decay=0.01,
+    betas=(0.9, 0.999),
+    eps=1e-8,
+    ns_steps=5,
+    matrix_mode=True,
+    matrix_scale=True,
+    max_grad_norm=None,
+)
+```
 
 ### Per-Iteration Computational Complexity
 For a 2D weight matrix of dimension $r \times c$ ($r \le c$), each NS step computes 3 matrix products costing $3 r^2 c$ operations. The total orthogonalization cost is:
@@ -217,7 +240,8 @@ TITAN_OptimizerBench_Local_Kaggle/
 
 ## ⚙️ Environment Setup & Hardware Compatibility
 
-### 1. Standard CUDA Environment (NVIDIA A100 / H100 / RTX 30xx / 40xx)
+### 1. Local Testing & Standard CUDA Environment (NVIDIA RTX 5050 / RTX 30xx–50xx / A100 / H100)
+Local testing and verification for this implementation were conducted on an **NVIDIA GeForce RTX 5050** GPU. For RTX 50-series (Blackwell) and modern CUDA GPUs, use Python 3.11+ with a CUDA 12.8+ PyTorch build:
 ```bash
 python -m venv env
 # On Windows:
