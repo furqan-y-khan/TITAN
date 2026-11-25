@@ -3,8 +3,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![PyTorch 2.3+](https://img.shields.io/badge/PyTorch-2.3%2B-ee4c2c.svg)](https://pytorch.org/)
 [![Target: IEEE TPAMI](https://img.shields.io/badge/Target-IEEE%20TPAMI%20(Under%20Review)-red.svg)](https://www.computer.org/csdl/journal/tp)
-[![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](LICENSE)
-[![Code Rights: All Rights Reserved](https://img.shields.io/badge/Code-All%20Rights%20Reserved-yellow.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Official empirical benchmark suite and reproducibility codebase for the research paper:
 
@@ -353,13 +352,6 @@ If you use the TITAN optimizer or benchmark harness in your research, please cit
 
 ---
 
-## 📄 Intellectual Property & Licensing
+## 📄 License
 
-> [!IMPORTANT]
-> **Pre-Publication Protection Notice:**  
-> This manuscript, benchmark suite, and optimizer implementation are currently submitted and under formal peer review for **IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)**.
-
-* **Manuscript, Figures, and Theoretical Proofs:** Licensed under [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International (CC BY-NC-ND 4.0)](https://creativecommons.org/licenses/by-nc-nd/4.0/).  
-  * *Permitted:* Downloading, reading, and non-commercial academic verification.
-  * *Prohibited:* Plagiarism, distribution of modified/derivative works, unauthorized commercial usage, or claiming patent/academic priority before formal publication.
-* **Codebase & Benchmark Suite:** Copyright © 2026 Furqan Yaqub Khan & Tawseef Ayoub Shaikh. All rights reserved. Source code is provided strictly for peer review evaluation, academic inspection, and reproducibility verification. No redistribution, sublicensing, or commercial deployment is permitted without prior written consent from the authors. See [`LICENSE`](LICENSE) for full terms.
+This project is licensed under the **Apache License, Version 2.0** — see the [`LICENSE`](LICENSE) file or [https://www.apache.org/licenses/LICENSE-2.0](https://www.apache.org/licenses/LICENSE-2.0) for details.
